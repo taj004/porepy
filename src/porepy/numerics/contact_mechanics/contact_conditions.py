@@ -275,10 +275,21 @@ class ColoumbContact:
 
 @njit(parallel=True)
 def _numba_discretization(
-        cumulative_tangential_jump, initial_gap, dilation_angle, gl_dim, gl_nc, friction_coefficient,
-        contact_force_normal, c_num_normal, displacement_jump_normal, scaled_cohesion,
-        contact_force_tangential,
-        displacement_jump_tangential, tol, c_num_tangential, ambient_dim
+        cumulative_tangential_jump: np.ndarray,
+        initial_gap: np.ndarray,
+        dilation_angle: np.ndarray,
+        gl_dim: int,
+        gl_nc: int,
+        friction_coefficient: np.ndarray,
+        contact_force_normal: np.ndarray,
+        c_num_normal: np.ndarray,
+        displacement_jump_normal: np.ndarray,
+        scaled_cohesion: np.ndarray,
+        contact_force_tangential: np.ndarray,
+        displacement_jump_tangential: np.ndarray,
+        tol: float,
+        c_num_tangential: np.ndarray,
+        ambient_dim: int,
 ) -> Tuple[np.ndarray, int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """ Numba wrapper for efficient discretization of contact conditions
 
