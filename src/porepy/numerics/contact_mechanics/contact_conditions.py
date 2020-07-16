@@ -653,50 +653,54 @@ def _sliding_coefficients(
 
 @njit
 def _l2(x: np.ndarray) -> np.ndarray:
-    x = np.atleast_2d(x)
-    return np.sqrt(np.sum(x ** 2, axis=0))
+    y = np.atleast_2d(x)
+    return np.sqrt(np.sum(y ** 2, axis=0))
 
 
-@njit
+@njit(parallel=True)
 def _norm_axis_0(x: np.ndarray) -> np.ndarray:
     """ Numba-friendly implementation of np.linalg.norm(x, axis=0)
 
     See: https://github.com/numba/numba/issues/2558#issuecomment-365314514
     """
-    nrm = np.ones_like(np.atleast_2d(x)[0, :])
-    for i in range(x.shape[1]):
-        nrm[i] *= np.linalg.norm(x[:, i])
+    y = np.atleast_2d(x)
+    nrm = np.ones_like(y[0, :])
+    for i in prange(y.shape[1]):
+        nrm[i] *= np.linalg.norm(y[:, i])
     return nrm
 
 
 @njit(parallel=True)
-def _isclose(a, b, rtol=1e-05, atol=1e-08, equal_nan=False):
+def _isclose(a: np.ndarray, b: np.ndarray, rtol: float = 1e-05, atol: float = 1e-08, equal_nan=False) -> np.ndarray:
     """ Numba-friendly implementation of np.isclose
+    Assume a, b are 1d-like-arrays
+
+    Returns
+    -------
+    res : np.ndarray (1d-array)
 
     See: https://numpy.org/doc/stable/reference/generated/numpy.isclose.html
     """
-    res = np.zeros_like(a, bool)
-    for i in prange(a.size):
-        _a, _b = a[i], b[i]
-        if np.isnan(_a) or np.isnan(_b):
-            if np.isnan(_a) and np.isnan(_b) and equal_nan:
-                res[i] = True
-            else:
-                res[i] = False
+    a, b = np.atleast_2d(a), np.atleast_2d(b)
+    assert a.shape[0] == b.shape[0] == 1
+    res = np.full(a.shape[1], False)
+    for i in prange(a.shape[1]):
+        _a, _b = a[0, i], b[0, i]
+        if np.isnan(_a) and np.isnan(_b) and equal_nan:
+            res[i] = True
         else:
-            res[i] = abs(a-b) <= atol + rtol * abs(b)
+            res[i] = np.abs(_a - _b) <= atol + rtol * np.abs(_b)
     return res
 
 
 @njit(parallel=True)
-def np_clip(a, a_min, a_max, out=None):
-    """ Numba-friendly implementation of np.clip(a, a_min, a_max, out)
+def np_clip(a: np.ndarray, a_min: np.float, a_max: np.float):
+    """ Numba-friendly implementation of np.clip(a, a_min, a_max)
 
     See: https://github.com/numba/numba/pull/3468#issuecomment-609841360
     """
-    if out is None:
-        out = np.empty_like(a)
-    for i in prange(len(a)):
+    out = np.empty_like(a)
+    for i in prange(a.size):
         if a[i] < a_min:
             out[i] = a_min
         elif a[i] > a_max:
