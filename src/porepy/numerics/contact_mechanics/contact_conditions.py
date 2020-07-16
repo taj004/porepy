@@ -558,27 +558,27 @@ def _penetration(
 #####
 
 @njit
-def _e(Tt: np.ndarray, cut: np.ndarray, bf: np.ndarray) -> np.ndarray:
+def _e(Tt: np.ndarray, cut: np.ndarray, bf: float) -> np.ndarray:
     # Compute part of (32) in Berge et al.
     return bf / _l2(-Tt + cut)
 
 
 @njit
-def _Q(Tt: np.ndarray, cut: np.ndarray, bf: np.ndarray) -> np.ndarray:
+def _Q(Tt: np.ndarray, cut: np.ndarray, bf: float) -> np.ndarray:
     # Implementation of the term Q involved in the calculation of (32) in Berge
     # et al.
     # This is the regularized Q
-    numerator = -Tt.dot((-Tt + cut).T)
+    numerator = np.dot(-Tt, (-Tt + cut).T)
 
     # Regularization to avoid issues during the iterations to avoid dividing by
     # zero if the faces are not in contact durign iterations.
-    denominator = max(bf, _l2(-Tt)) * _l2(-Tt + cut)
+    denominator = np.maximum(bf, _l2(-Tt)) * _l2(-Tt + cut)
 
     return numerator / denominator
 
 
 @njit
-def _M(Tt: np.ndarray, cut: np.ndarray, bf: np.ndarray) -> np.ndarray:
+def _M(Tt: np.ndarray, cut: np.ndarray, bf: float) -> np.ndarray:
     """ Compute the coefficient M used in Eq. (32) in Berge et al.
     """
     Id = np.eye(Tt.shape[0])
@@ -587,14 +587,14 @@ def _M(Tt: np.ndarray, cut: np.ndarray, bf: np.ndarray) -> np.ndarray:
 
 
 @njit
-def _hf(Tt: np.ndarray, cut: np.ndarray, bf: np.ndarray) -> np.ndarray:
+def _hf(Tt: np.ndarray, cut: np.ndarray, bf: float) -> np.ndarray:
     # This is the product e * Q * (-Tt + cut), used in computation of r in (32)
     return _e(Tt, cut, bf) * _Q(Tt, cut, bf).dot(-Tt + cut)
 
 
 @njit
 def _sliding_coefficients(
-        Tt: np.ndarray, ut: np.ndarray, bf: np.ndarray, c: np.ndarray, tol: float
+        Tt2: np.ndarray, ut2: np.ndarray, bf: float, c: float, tol: float
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute the regularized versions of coefficients L, v and r, defined in
@@ -607,9 +607,8 @@ def _sliding_coefficients(
         c: Numerical parameter
 
     """
-    if Tt.ndim <= 1:
-        Tt = np.atleast_2d(Tt).T
-        ut = np.atleast_2d(ut).T
+    Tt: np.ndarray = np.reshape(Tt2.astype(np.float64), (Tt2.size, 1))
+    ut: np.ndarray = np.reshape(ut2.astype(np.float64), (ut2.size, 1))
 
     cut = c * ut
     # Identity matrix
@@ -629,26 +628,28 @@ def _sliding_coefficients(
 
     # Regularization during the iterations requires computations of parameters
     # alpha, beta, delta. In degenerate cases, use
-    beta = 1
+    beta: float = 1.0
     # Avoid division by zero:
     l2_Tt = _l2(-Tt)
-    if not _isclose(l2_Tt, np.zeros_like(l2_Tt)):
+    if np.all(l2_Tt > tol):
         alpha = -Tt.T.dot(-Tt + cut) / (l2_Tt * _l2(-Tt + cut))
         # Parameter delta.
         # NOTE: The denominator bf is correct. The definition given in Berge is wrong.
-        delta = min(l2_Tt / bf, 1)
+        delta = np.minimum(l2_Tt / bf, 1)
 
-        if alpha < 0:
-            beta = 1 / (1 - alpha * delta)
+        if np.all(alpha < 0):
+            beta: float = np.atleast_2d(1 / (1 - alpha * delta))[0, 0]
 
     # The expression (I - beta * M)^-1
     # NOTE: In the definition of \tilde{L} in Berge, the inverse on the inner
-    # paranthesis is missing.
-    IdM_inv = np.linalg.inv(Id - beta * coeff_M)
+    # parenthesis is missing.
+    IdM_inv = np.linalg.inv(Id - beta * coeff_M).copy()  # copy to get contiguous array, (dim, dim)
 
+    loc_displacement_tangential = c * (IdM_inv - Id)
+    r = -IdM_inv.dot(_hf(Tt, cut, bf))
     v = IdM_inv.dot(-Tt + cut) / _l2(-Tt + cut)
 
-    return c * (IdM_inv - Id), -IdM_inv.dot(_hf(Tt, cut, bf)), v
+    return loc_displacement_tangential, r, v
 
 
 @njit
