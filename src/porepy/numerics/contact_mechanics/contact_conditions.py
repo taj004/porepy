@@ -336,9 +336,10 @@ def _numba_discretization(
     # Compute dg/du_t = - tan(dilation_angle) u_t / || u_t ||
     # Avoid dividing by zero if u_t = 0. In this case, we extend to the limit value
     # from the positive, see module level explanation.
-    ind = np.logical_not(
-        _isclose(cumulative_tangential_jump, np.zeros_like(cumulative_tangential_jump), rtol=tol, atol=tol)
-    )[0]
+    _zeros = np.zeros_like(cumulative_tangential_jump)
+    ind: np.ndarray = np.logical_not(
+        _isclose(cumulative_tangential_jump, _zeros, rtol=tol, atol=tol)
+    )
     d_gap = np.zeros((gl_dim, gl_nc))
     d_gap[-1, :] = -np.tan(dilation_angle)
     # Compute dg/du_t where u_t is nonzero
@@ -352,7 +353,7 @@ def _numba_discretization(
     # The friction bound is computed from the previous state of the contact
     # force and normal component of the displacement jump.
     # Note that the displacement jump is rotated before adding to the contact force
-    friction_bound = (
+    friction_bound = np.atleast_1d(
             friction_coefficient
             * np_clip(
                 -contact_force_normal + c_num_normal * (displacement_jump_normal - gap),
@@ -398,7 +399,7 @@ def _numba_discretization(
     # Structures for storing the computed coefficients.
     displacement_weight = np.empty((num_cells, ambient_dim, ambient_dim))  # Multiplies displacement jump
     traction_weight = np.empty((num_cells, ambient_dim, ambient_dim))  # Multiplies the normal forces
-    rhs = np.empty((num_cells, ambient_dim, ambient_dim))  # Right-hand side
+    _rhs = np.empty((num_cells, ambient_dim))  # Right-hand side
 
     # Zero vectors of the size of the tangential space and the full space,
     # respectively. These are needed to complement the discretization
@@ -425,20 +426,21 @@ def _numba_discretization(
                 displacement_jump_tangential[:, i],
                 friction_bound[i],
                 c_num_tangential[i],
+                tol,
             )
 
             # There is no interaction between displacement jumps in normal and
             # tangential direction
             L = np.hstack((loc_displacement_tangential, np.atleast_2d(zer).T))
-            normal_displacement = np.hstack((-d_gap[:, i], 1))
+            normal_displacement = np.atleast_2d(np.hstack((-d_gap[:, i], np.ones(1))))
             loc_displacement_weight = np.vstack((L, normal_displacement))
             # Right hand side is computed from (24-25). In the normal
             # direction, a contribution from the previous iterate enters to cancel
             # the gap
-            r_n = gap[i] - np.dot(d_gap[:, i], cumulative_tangential_jump[:, i].T)
+            r_n: np.ndarray = gap[i] - np.dot(d_gap[:, i], cumulative_tangential_jump[:, i].T) * np.ones(1)
             # assert np.isclose(r_n, initial_gap[i])  # TODO: Agree on cumulative with EK
-            r_t = r + friction_bound[i] * v
-            r = np.vstack((r_t, r_n))
+            r_t: np.ndarray = r + friction_bound[i] * v
+            r = np.hstack((np.atleast_2d(r_t), np.atleast_2d(r_n)))
             # Unit contribution from tangential force
             loc_traction_weight = np.eye(ambient_dim)
             # Zero weight on normal force
@@ -467,10 +469,10 @@ def _numba_discretization(
 
             # The right hand side is the previous tangential jump, and the gap
             # value in the normal direction.
-            r_t = displacement_jump_tangential[:, i]
-            r_n = gap[i] - np.dot(d_gap[:, i], cumulative_tangential_jump[:, i].T)
+            r_t = np.atleast_2d(displacement_jump_tangential[:, i])
+            r_n = gap[i] - np.dot(d_gap[:, i], cumulative_tangential_jump[:, i].T) * np.ones(1)
             # assert np.isclose(r_n, initial_gap[i])
-            r = np.hstack((r_t, r_n)).T
+            r = np.hstack((r_t, np.atleast_2d(r_n))).T
 
         elif not penetration_bc[i]:  # not in contact
             # This is a free boundary, no conditions on displacement
@@ -478,7 +480,7 @@ def _numba_discretization(
 
             # Free boundary conditions on the forces.
             loc_traction_weight = np.eye(ambient_dim)
-            r = np.zeros(ambient_dim)
+            r = np.atleast_2d(np.zeros(ambient_dim))
 
         else:  # should never happen
             raise AssertionError("Should not get here")
@@ -488,23 +490,30 @@ def _numba_discretization(
         # impede convergence of an iterative solver for the linearized
         # system. As a partial remedy, rescale the condition to become
         # closer to unity.
-        w_diag: np.ndarray = np.diag(loc_displacement_weight) + np.diag(loc_traction_weight)
+        w_diag: np.ndarray = np.diag(loc_displacement_weight) + np.diag(loc_traction_weight)  # dim: (ambient_dim)
         W_inv = np.diag(1 / w_diag)
         loc_displacement_weight: np.ndarray = W_inv.dot(loc_displacement_weight)  # dim: (ambient_dim, ambient_dim)
         loc_traction_weight = W_inv.dot(loc_traction_weight)  # dim: (ambient_dim, ambient_dim)
-        r = r.ravel() / w_diag  # dim: (ambient_dim, ambient_dim)
+        rhs_i = r.ravel() / w_diag  # dim: (ambient_dim)
 
         # Assign to array of global coefficients.
         displacement_weight[i, :, :] = loc_displacement_weight
         traction_weight[i, :, :] = loc_traction_weight
-        rhs[i, :, :] = r
+        _rhs[i, :] = rhs_i
 
-    rhs = np.hstack(rhs)
+    rhs = np.ravel(_rhs)
 
     num_blocks = len(traction_weight)
-    data_traction: np.ndarray = np.array(traction_weight).ravel()
 
-    data_displacement: np.ndarray = np.array(displacement_weight).ravel()
+    _data_traction = traction_weight[0, ...]
+    for ax_idx in np.arange(1, traction_weight.shape[0]):
+        _data_traction = np.hstack((_data_traction, traction_weight[ax_idx, ...]))
+    data_traction = _data_traction.ravel()
+
+    _data_displacement = displacement_weight[0, ...]
+    for ax_idx in np.arange(1, displacement_weight.shape[0]):
+        _data_displacement = np.hstack((_data_displacement, displacement_weight[ax_idx, ...]))
+    data_displacement = _data_displacement.ravel()
 
     return data_traction, num_blocks, data_displacement, rhs, penetration_bc, sliding_bc
 
