@@ -1079,6 +1079,7 @@ class Mpfa(FVElliptic):
 
         num_subfno = subcell_topology.num_subfno
         num_subfno_unique = subcell_topology.subfno_unique.size
+        num_subhfno = subcell_topology.subhfno.size
 
         # Step 1
         # The vector source term in the flux continuity equation is discretized
@@ -1128,7 +1129,7 @@ class Mpfa(FVElliptic):
             (
                 np.ones(num_subfno_unique),
                 (subcell_topology.subfno_unique, subcell_topology.unique_subfno),
-            )
+            ), shape=(num_subfno, num_subhfno)
         )
 
         # Prepare for computation of div_vector_source_faces term

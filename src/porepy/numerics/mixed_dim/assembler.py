@@ -668,9 +668,11 @@ class Assembler:
                         if other_edge == e:
                             continue
 
+                        # Avoid coupling between mortar grids of same dimensions.
+
                         if (
                             data_other["mortar_grid"].dim
-                            != data_edge["mortar_grid"].dim
+                            == data_edge["mortar_grid"].dim
                         ):
                             continue
 
@@ -698,8 +700,8 @@ class Assembler:
                         loc_mat, _ = self._assign_matrix_vector(
                             self.full_dof[[si, ei, oi]], sps_matrix
                         )
-                        tmp_mat, loc_rhs = e_discr.assemble_edge_coupling_via_high_dim(
-                            g_slave, data_slave, data_edge, data_other, loc_mat
+                        tmp_mat, loc_rhs = e_discr.assemble_edge_coupling_via_low_dim(
+                            g_slave, data_slave, e, data_edge, other_edge, data_other, loc_mat
                         )
                         matrix[mat_key][ei, oi] = tmp_mat[1, 2]
                         rhs[mat_key][ei] += loc_rhs[1]

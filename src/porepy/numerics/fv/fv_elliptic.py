@@ -2,6 +2,8 @@
 Module contains superclass for mpfa and tpfa.
 """
 import porepy as pp
+import numpy as np
+import scipy.sparse as sps
 
 
 class FVElliptic(pp.EllipticDiscretization):
@@ -136,7 +138,9 @@ class FVElliptic(pp.EllipticDiscretization):
                 size of the matrix will depend on the specific discretization.
         """
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
-
+        if not "flux" in matrix_dictionary:
+            self.discretize(g, data)
+            
         div = pp.fvutils.scalar_divergence(g)
         flux = matrix_dictionary["flux"]
         if flux.shape[0] != g.num_faces:
@@ -328,6 +332,105 @@ class FVElliptic(pp.EllipticDiscretization):
         bc_val = data[pp.PARAMETERS][self.keyword]["bc_values"]
         rhs[2] -= proj * matrix_dictionary["bound_pressure_face"] * bc_val
 
+    def assemble_int_bound_grad_p_between_interfaces(
+        self, g, data_grid, data_edge, proj_primary, proj_secondary, cc, matrix, rhs, use_slave_proj=False
+    ):
+        """ Assemble the contribution from an internal
+        boundary, manifested as a condition on the boundary pressure.
+
+        Parameters:
+            g (Grid): Grid which the condition should be imposed on.
+            data_grid (dictionary): Data dictionary for the node in the
+                mixed-dimensional grid.
+            proj_primary (sparse matrix): Pressure projection from the higher-dim
+                grid to the primary mortar grid.
+            proj_secondary (sparse matrix): Flux projection from the secondary mortar
+                grid to the main grid.
+            cc (block matrix, 3x3): Block matrix of size 3 x 3, whwere each block represents
+                coupling between variables on this interface. Index 0, 1 and 2
+                represent the master grid, the primary and secondary interface,
+                respectively.
+            matrix (block matrix 3x3): Discretization matrix for the edge and
+                the two adjacent nodes.
+            rhs (block_array 3x1): Block matrix of size 3 x 1, representing the right hand
+                side of this coupling. Index 0, 1 and 2 represent the master grid,
+                the primary and secondary interface, respectively.
+
+        """
+
+        mg = data_edge["mortar_grid"]
+
+        if use_slave_proj:
+            proj = mg.master_to_mortar_avg(3)
+        else:
+            proj = mg.slave_to_mortar_avg(3)
+
+        rt0_flux_vector = pp.RT0("RT0").project_flux_matrix(g, data_grid)
+        """
+        R = data_edge["tangential_normal_projection"].project_tangential_normal(g.num_cells)
+        if g.dim == 1:
+            rows = np.array([0,1,2,0,1,2,0,1,2])
+            cols = np.array([0,0,0,1,1,1,2,2,2])
+            vals = np.array([R[0,0], R[1,0], 0, R[0,1], R[1,1], 0, 0, 0, 1])
+            block = sps.coo_matrix((vals, (rows,cols)), shape=(3,3)).toarray()
+            R = sps.kron(sps.identity(g.num_cells), block)
+
+        in_plane_rt0_flux_vector = R * rt0_flux_vector
+        """
+        
+        parameter_dictionary = data_grid[pp.PARAMETERS][self.keyword]
+        parameter_dictionary_edge = data_edge[pp.PARAMETERS][self.keyword]
+
+        # Extract parameters
+        k = parameter_dictionary["second_order_tensor"]
+        # should it be multiplied by factor two?
+        transverse_diffusivity = np.absolute(parameter_dictionary_edge["transverse_diffusivity"]) 
+
+        inv_k = np.linalg.inv(k.values[0 : 3, 0 : 3, 0])
+        k_trans = transverse_diffusivity[:, 0]
+        
+        for c in range (1, mg.num_cells):
+            B = transverse_diffusivity[:, c]
+            k_trans = sps.block_diag((k_trans, B))
+
+        for c in range (1, g.num_cells):
+            A = np.linalg.inv(k.values[0 : 3, 0 : 3, c])
+            inv_k = sps.block_diag((inv_k, A))
+
+        inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
+        # If normal diffusivity is given as a constant, parse to np.array
+        if not isinstance(inv_k_ortho, np.ndarray):
+            inv_k_ortho *= np.ones(mg.num_cells)
+
+        inv_k_ortho = sps.diags(inv_k_ortho)
+
+        # compute grad_p = inv_k * q
+        # shape (3 x g.num_cells, g.num_faces)
+        # order is q_1x, q_1y, q_1z, q_2x, q_2y, q_2z, ..
+        grad_p = inv_k * rt0_flux_vector#in_plane_rt0_flux_vector
+        #grad_p = inv_k * in_plane_rt0_flux_vector
+
+        # compute T = inv_k_ortho * k_trans
+        # shape (mg.num_cells, 3 x mg.num_cells)
+        # order is
+        # [[kt_1x, kt_1y, kt_1z,   0      0      0  , ...
+        #  [  0      0      0    kt_2x, kt_2y, kt_2z, ...
+        if mg.num_cells == 1:
+            T = inv_k_ortho * k_trans.reshape((1,3))
+            term = np.dot(T, proj * grad_p)
+        else:
+            T = inv_k_ortho * k_trans     
+            term = T * proj * grad_p
+
+        if g.dim == 1:
+            term = sps.csr_matrix(term)
+
+        cc[1, 2] += (
+            term * proj_secondary
+        )
+
+        return cc, rhs
+
     def assemble_int_bound_pressure_trace_between_interfaces(
         self, g, data_grid, proj_primary, proj_secondary, cc, matrix, rhs
     ):
@@ -360,7 +463,7 @@ class FVElliptic(pp.EllipticDiscretization):
             proj_primary * matrix_dictionary["bound_pressure_face"] * proj_secondary
         )
         return cc, rhs
-
+    
     def assemble_int_bound_pressure_cell(
         self, g, data, data_edge, cc, matrix, rhs, self_ind
     ):
@@ -397,7 +500,224 @@ class FVElliptic(pp.EllipticDiscretization):
         proj = mg.slave_to_mortar_avg()
 
         cc[2, self_ind] -= proj
+        
+    def assemble_int_bound_grad_p(
+        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_slave_proj=False
+    ):
+        """ Abstract method. Assemble the contribution from an internal
+        boundary, manifested as a condition on the cell pressure.
 
+        The intended use is when the internal boundary is coupled to another
+        node in a mixed-dimensional method. Specific usage depends on the
+        interface condition between the nodes; this method will typically be
+        used to impose flux continuity on a lower-dimensional domain.
+
+        Implementations of this method will use an interplay between the grid on
+        the node and the mortar grid on the relevant edge.
+
+        Parameters:
+            g (Grid): Grid which the condition should be imposed on.
+            data (dictionary): Data dictionary for the node in the
+                mixed-dimensional grid.
+            data_edge (dictionary): Data dictionary for the edge in the
+                mixed-dimensional grid.
+            grid_swap (boolean): If True, the grid g is identified with the @
+                slave side of the mortar grid in data_adge.
+            cc (block matrix, 3x3): Block matrix for the coupling condition.
+                The first and second rows and columns are identified with the
+                master and slave side; the third belongs to the edge variable.
+                The discretization of the relevant term is done in-place in cc.
+            matrix (block matrix 3x3): Discretization matrix for the edge and
+                the two adjacent nodes.
+            rhs (block_array 3x1): Right hand side contribution for the edge and
+                the two adjacent nodes.
+            self_ind (int): Index in cc and matrix associated with this node.
+                Should be either 1 or 2.
+        """
+
+        if g.dim == 0:
+            return
+       
+        mg = data_edge["mortar_grid"]
+            
+        if use_slave_proj:
+            proj = mg.master_to_mortar_avg(3)
+            proj_vector_source = mg.mortar_to_master_int(g.dim)
+        else:
+            proj = mg.slave_to_mortar_avg(3)
+            proj_vector_source = mg.mortar_to_slave_int(g.dim)
+
+        rt0_flux_vector = pp.RT0("RT0").project_flux_matrix(g, data)
+
+        """
+        R = data_edge["tangential_normal_projection"].project_tangential_normal(g.num_cells)
+        if g.dim == 1:
+            rows = np.array([0,1,2,0,1,2,0,1,2])
+            cols = np.array([0,0,0,1,1,1,2,2,2])
+            vals = np.array([R[0,0], R[1,0], 0, R[0,1], R[1,1], 0, 0, 0, 1])
+            block = sps.coo_matrix((vals, (rows,cols)), shape=(3,3)).toarray()
+            R = sps.kron(sps.identity(g.num_cells), block)
+
+        in_plane_rt0_flux_vector = R * rt0_flux_vector
+        """
+        
+        parameter_dictionary = data[pp.PARAMETERS][self.keyword]
+        matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
+        matrix_dictionary_edge = data_edge[pp.DISCRETIZATION_MATRICES][self.keyword]
+        # Extract parameters
+        k = parameter_dictionary["second_order_tensor"]
+        if not "bound_flux" in matrix_dictionary:
+            self.discretize(g, data)
+        parameter_dictionary_edge = data_edge[pp.PARAMETERS][self.keyword]
+
+        # should it be multiplied by factor two?
+        transverse_diffusivity = parameter_dictionary_edge["transverse_diffusivity"]
+        div_vector_source = matrix_dictionary["div_vector_source"]
+
+        bound_flux = matrix_dictionary["bound_flux"]
+        flux = matrix_dictionary["flux"]
+        bc_val = parameter_dictionary["bc_values"]
+
+        inv_k = np.linalg.inv(k.values[0 : 3, 0 : 3, 0])
+        k_trans = transverse_diffusivity[:, 0]
+        
+        for c in range (1, mg.num_cells):
+            B = transverse_diffusivity[:, c]
+            k_trans = sps.block_diag((k_trans, B))
+
+        for c in range (1, g.num_cells):
+            A = np.linalg.inv(k.values[0 : 3, 0 : 3, c])
+            inv_k = sps.block_diag((inv_k, A))
+
+        inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
+        # If normal diffusivity is given as a constant, parse to np.array
+        if not isinstance(inv_k_ortho, np.ndarray):
+            inv_k_ortho *= np.ones(mg.num_cells)
+
+        inv_k_ortho = sps.diags(inv_k_ortho) 
+
+        # compute grad_p = inv_k * q
+        # shape (3 x g.num_cells, g.num_faces)
+        # order is q_1x, q_1y, q_1z, q_2x, q_2y, q_2z, ..
+        grad_p = inv_k * rt0_flux_vector#in_plane_rt0_flux_vector
+        #grad_p = inv_k * in_plane_rt0_flux_vector
+
+        # compute T = inv_k_ortho * k_trans
+        # shape (mg.num_cells, 3 x mg.num_cells)
+        # order is
+        # [[kt_1x, kt_1y, kt_1z,   0      0      0  , ...
+        #  [  0      0      0    kt_2x, kt_2y, kt_2z, ...
+        if mg.num_cells == 1:
+            T = inv_k_ortho * k_trans.reshape((1,3))
+            term = -np.dot(T, proj * grad_p)
+        else:
+            T = inv_k_ortho * k_trans     
+            term = -T * proj * grad_p
+
+        if g.dim == 1:
+            term = sps.csr_matrix(term)
+            
+        cc[2, self_ind] += term * flux
+
+        rhs[2] -= term * bound_flux * bc_val
+
+    def assemble_int_bound_vector_source(
+        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_slave_proj=False
+    ):
+        """ Abstract method. Assemble the contribution from an internal
+        boundary, manifested as a source term.
+
+        The intended use is when the internal boundary is coupled to another
+        node in a mixed-dimensional method. Specific usage depends on the
+        interface condition between the nodes; this method will typically be
+        used to impose flux continuity on a lower-dimensional domain.
+
+        Implementations of this method will use an interplay between the grid on
+        the node and the mortar grid on the relevant edge.
+
+        Parameters:
+            g (Grid): Grid which the condition should be imposed on.
+            data (dictionary): Data dictionary for the node in the
+                mixed-dimensional grid.
+            data_edge (dictionary): Data dictionary for the edge in the
+                mixed-dimensional grid.
+            grid_swap (boolean): If True, the grid g is identified with the @
+                slave side of the mortar grid in data_adge.
+            cc (block matrix, 3x3): Block matrix for the coupling condition.
+                The first and second rows and columns are identified with the
+                master and slave side; the third belongs to the edge variable.
+                The discretization of the relevant term is done in-place in cc.
+            matrix (block matrix 3x3): Discretization matrix for the edge and
+                the two adjacent nodes.
+            rhs (block_array 3x1): Right hand side contribution for the edge and
+                the two adjacent nodes.
+            self_ind (int): Index in cc and matrix associated with this node.
+                Should be either 1 or 2.
+
+        """
+        if g.dim == 0:
+            return
+        mg = data_edge["mortar_grid"]
+        matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
+        parameter_dictionary = data[pp.PARAMETERS][self.keyword]
+
+        parameter_dictionary_edge = data_edge[pp.PARAMETERS][self.keyword]
+
+        transverse_diffusivity = parameter_dictionary_edge["transverse_diffusivity"]
+        inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
+        # If normal diffusivity is given as a constant, parse to np.array
+        if not isinstance(inv_k_ortho, np.ndarray):
+            inv_k_ortho *= np.ones(mg.num_cells)
+
+        inv_k_ortho = sps.diags(inv_k_ortho) 
+       
+        if use_slave_proj:
+            proj = mg.mortar_to_master_int(g.dim)
+        else:
+            proj = mg.mortar_to_slave_int(g.dim)
+
+        div_vector_source = matrix_dictionary["div_vector_source"]
+
+        k = parameter_dictionary["second_order_tensor"]
+
+        if g.dim == 1:
+            fi, ci, _ = sps.find(g.cell_faces)
+            fc_cc = g.face_centers[::, fi] - g.cell_centers[::, ci]
+            dist_face_cell = np.linalg.norm(fc_cc, 2, axis=0)
+            k = k.values[0,0,ci]
+            values = np.divide(dist_face_cell,k)
+            map_arithmetic_mean = sps.coo_matrix(
+                (
+                    values,
+                    (fi, ci)), shape=(g.num_faces, g.num_cells)
+            )
+            div_vector_source = sps.diags(div_vector_source)
+            div_vector_source_inv_k = div_vector_source * map_arithmetic_mean
+            k_trans = transverse_diffusivity[0, :]
+            kt = sps.diags(k_trans)
+        else:
+            inv_k = np.linalg.inv(k.values[0 : 2, 0 : 2, 0])
+            kt = transverse_diffusivity[0 : 2, 0].reshape((2,1))
+
+            for c in range (1, g.num_cells):
+                A = np.linalg.inv(k.values[0 : 2, 0 : 2, c])
+                inv_k = sps.block_diag((inv_k, A))
+
+            for c in range (1, mg.num_cells):
+                B = transverse_diffusivity[0 : 2, c].reshape((2,1))
+                kt = sps.block_diag((kt, B))               
+
+            div_vector_source_inv_k = div_vector_source * inv_k
+            
+        div = pp.fvutils.scalar_divergence(g)
+
+        inv_M = sps.diags(1.0 / mg.cell_volumes)       
+            
+        cc[self_ind, 2] += div * div_vector_source_inv_k * proj * kt * inv_k_ortho * inv_M
+        #inv_kf = parameter_dictionary_edge["inv_kf"]
+        #proj_int = mg.slave_to_mortar_avg()
+        #cc[2,2] -= factor * inv_kf * factor * proj_int * div * div_vector_source_inv_k * proj# * inv_M
+        
     def enforce_neumann_int_bound(self, g, data_edge, matrix, self_ind):
         """ Enforce Neumann boundary conditions on a given system matrix.
 
