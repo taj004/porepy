@@ -1,7 +1,7 @@
 import unittest
-import scipy.sparse as sps
-import numpy as np
 
+import numpy as np
+import scipy.sparse as sps
 
 from porepy.utils import sparse_mat
 
@@ -150,9 +150,9 @@ class TestSparseMath(unittest.TestCase):
         A0 = sparse_mat.slice_mat(A, np.array([1, 2], dtype=int))
         A1 = sparse_mat.slice_mat(A, np.array([0, 1]))
         A2 = sparse_mat.slice_mat(A, 2)
-        A3 = sparse_mat.slice_mat(A, np.array([], dtype=np.int))
-        A4 = sparse_mat.slice_mat(A, np.array([0, 2], dtype=np.int))
-        A5 = sparse_mat.slice_mat(A, np.array([1, 1], dtype=np.int))
+        A3 = sparse_mat.slice_mat(A, np.array([], dtype=int))
+        A4 = sparse_mat.slice_mat(A, np.array([0, 2], dtype=int))
+        A5 = sparse_mat.slice_mat(A, np.array([1, 1], dtype=int))
 
         self.assertTrue(np.sum(A0 != A0_t) == 0)
         self.assertTrue(np.sum(A1 != A1_t) == 0)
@@ -175,9 +175,9 @@ class TestSparseMath(unittest.TestCase):
         A0 = sparse_mat.slice_mat(A, np.array([1, 2], dtype=int))
         A1 = sparse_mat.slice_mat(A, np.array([0, 1]))
         A2 = sparse_mat.slice_mat(A, 2)
-        A3 = sparse_mat.slice_mat(A, np.array([], dtype=np.int))
-        A4 = sparse_mat.slice_mat(A, np.array([0, 2], dtype=np.int))
-        A5 = sparse_mat.slice_mat(A, np.array([1, 1], dtype=np.int))
+        A3 = sparse_mat.slice_mat(A, np.array([], dtype=int))
+        A4 = sparse_mat.slice_mat(A, np.array([0, 2], dtype=int))
+        A5 = sparse_mat.slice_mat(A, np.array([1, 1], dtype=int))
 
         self.assertTrue(np.sum(A0 != A0_t) == 0)
         self.assertTrue(np.sum(A1 != A1_t) == 0)
@@ -251,7 +251,7 @@ class TestSparseMath(unittest.TestCase):
 
         A_t = sps.csc_matrix(np.array([[0, 0, 2], [3, 0, 1], [1, 0, 0]]))
 
-        sparse_mat.merge_matrices(A, B, np.array([0, 2], dtype=np.int))
+        sparse_mat.merge_matrices(A, B, np.array([0, 2], dtype=int))
 
         self.assertTrue(np.sum(A != A_t) == 0)
 
@@ -263,7 +263,7 @@ class TestSparseMath(unittest.TestCase):
 
         A_t = sps.csc_matrix(np.array([[0, 0, 2], [1, 3, 1], [0, 1, 0]]))
 
-        sparse_mat.merge_matrices(A, B, np.array([1, 2], dtype=np.int))
+        sparse_mat.merge_matrices(A, B, np.array([1, 2], dtype=int))
 
         self.assertTrue(np.sum(A != A_t) == 0)
 
@@ -275,7 +275,7 @@ class TestSparseMath(unittest.TestCase):
 
         A_t = sps.csc_matrix(np.array([[2, 0, 0], [1, 0, 0], [0, 0, 3]]))
         try:
-            sparse_mat.merge_matrices(A, B, np.array([0, 0], dtype=np.int))
+            sparse_mat.merge_matrices(A, B, np.array([0, 0], dtype=int))
         except ValueError:
             pass
 
@@ -287,7 +287,7 @@ class TestSparseMath(unittest.TestCase):
 
         A_t = sps.csr_matrix(np.array([[0, 2, 2], [1, 0, 0], [3, 1, 3]]))
 
-        sparse_mat.merge_matrices(A, B, np.array([0, 2], dtype=np.int))
+        sparse_mat.merge_matrices(A, B, np.array([0, 2], dtype=int))
 
         self.assertTrue(np.sum(A != A_t) == 0)
 
@@ -299,7 +299,7 @@ class TestSparseMath(unittest.TestCase):
 
         A_t = sps.csr_matrix(np.array([[0, 2, 2], [3, 1, 3], [0, 0, 3]]))
 
-        sparse_mat.merge_matrices(A, B, np.array([0, 1], dtype=np.int))
+        sparse_mat.merge_matrices(A, B, np.array([0, 1], dtype=int))
 
         self.assertTrue(np.sum(A != A_t) == 0)
 
@@ -340,6 +340,29 @@ class TestSparseMath(unittest.TestCase):
         value = sparse_mat.csr_matrix_from_blocks(
             arr.ravel("c"), block_size, num_blocks
         )
+
+        self.assertTrue(np.allclose(known, value.toarray()))
+
+    def test_csr_matrix_from_array(self):
+
+        block_size = 2
+        num_blocks = 2
+        arr = np.array([1, 2, 3, 4, 5, 6, 7, 8])
+
+        known = np.array([[1, 2, 0, 0], [3, 4, 0, 0], [0, 0, 5, 6], [0, 0, 7, 8]])
+        value = sparse_mat.csr_matrix_from_blocks(arr, block_size, num_blocks)
+
+        self.assertTrue(np.allclose(known, value.toarray()))
+
+    # Tests of csr_matrix_from_blocks
+    def test_csc_matrix_from_array(self):
+
+        block_size = 2
+        num_blocks = 2
+        arr = np.array([1, 2, 3, 4, 5, 6, 7, 8])
+
+        known = np.array([[1, 3, 0, 0], [2, 4, 0, 0], [0, 0, 5, 7], [0, 0, 6, 8]])
+        value = sparse_mat.csc_matrix_from_blocks(arr, block_size, num_blocks)
 
         self.assertTrue(np.allclose(known, value.toarray()))
 

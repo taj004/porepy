@@ -3,10 +3,13 @@ Discretization of the source term of an equation for FV methods.
 """
 import numpy as np
 import scipy.sparse as sps
+
 import porepy as pp
 
+module_sections = ["numerics", "disrcetization"]
 
-class ScalarSource(object):
+
+class ScalarSource(pp.numerics.discretization.Discretization):
     """
     Discretization of the integrated source term
     int q * dx
@@ -16,8 +19,9 @@ class ScalarSource(object):
     rhs = param.get_source.keyword.
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, keyword):
-        """ Set the discretization, with the keyword used for storing various
+        """Set the discretization, with the keyword used for storing various
         information associated with the discretization.
 
         Paramemeters:
@@ -26,8 +30,9 @@ class ScalarSource(object):
         """
         self.keyword = keyword
 
+    @pp.time_logger(sections=module_sections)
     def _key(self):
-        """ Get the keyword of this object, on a format friendly to access relevant
+        """Get the keyword of this object, on a format friendly to access relevant
         fields in the data dictionary
 
         Returns:
@@ -36,8 +41,9 @@ class ScalarSource(object):
         """
         return self.keyword + "_"
 
+    @pp.time_logger(sections=module_sections)
     def ndof(self, g):
-        """ Return the number of degrees of freedom associated to the method.
+        """Return the number of degrees of freedom associated to the method.
 
         Parameter:
             g: grid, or a subclass.
@@ -48,8 +54,9 @@ class ScalarSource(object):
         """
         return g.num_cells
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix_rhs(self, g, data):
-        """ Return the (null) matrix and right-hand side for a discretization of the
+        """Return the (null) matrix and right-hand side for a discretization of the
         integrated source term. Also discretize the necessary operators if the data
         dictionary does not contain a source term.
 
@@ -67,8 +74,9 @@ class ScalarSource(object):
         """
         return self.assemble_matrix(g, data), self.assemble_rhs(g, data)
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix(self, g, data):
-        """ Return the (null) matrix and for a discretization of the integrated source
+        """Return the (null) matrix and for a discretization of the integrated source
         term. Also discretize the necessary operators if the data dictionary does not
         contain a source term.
 
@@ -86,8 +94,9 @@ class ScalarSource(object):
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def assemble_rhs(self, g, data):
-        """ Return the rhs for a discretization of the integrated source term. Also
+        """Return the rhs for a discretization of the integrated source term. Also
         discretize the necessary operators if the data dictionary does not contain a
         source term.
 
@@ -109,8 +118,9 @@ class ScalarSource(object):
         ), "There should be one source value for each cell"
         return matrix_dictionary["bound_source"] * sources
 
-    def discretize(self, g, data, faces=None):
-        """ Discretize an integrated source term.
+    @pp.time_logger(sections=module_sections)
+    def discretize(self, g, data):
+        """Discretize an integrated source term.
 
         Parameters:
             g : grid, or a subclass, with geometry fields computed.

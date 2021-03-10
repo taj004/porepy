@@ -6,23 +6,26 @@ Acknowledgements:
     Toolbox (MRST) developed by SINTEF ICT, see www.sintef.no/projectweb/mrst/
 
 """
-
 import numpy as np
 import scipy.sparse as sps
 import scipy.spatial
 
+import porepy as pp
 from porepy.grids.grid import Grid
-from porepy.utils import setmembership, accumarray
+from porepy.utils import accumarray, setmembership
+
+module_sections = ["grids", "gridding"]
 
 
 class TriangleGrid(Grid):
-    """ Class representation of a general triangular grid.
+    """Class representation of a general triangular grid.
 
     For information on attributes and methods, see the documentation of the
     parent Grid class.
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, p, tri=None, name=None):
         """
         Create triangular grid from point cloud.
@@ -102,8 +105,9 @@ class TriangleGrid(Grid):
 
         super(TriangleGrid, self).__init__(2, nodes, face_nodes, cell_faces, name)
 
+    @pp.time_logger(sections=module_sections)
     def cell_node_matrix(self):
-        """ Get cell-node relations in a Nc x 3 matrix
+        """Get cell-node relations in a Nc x 3 matrix
         Perhaps move this method to a superclass when tet-grids are implemented
         """
 
@@ -119,7 +123,7 @@ class TriangleGrid(Grid):
 
 
 class StructuredTriangleGrid(TriangleGrid):
-    """ Class for a structured triangular grids, composed of squares divided
+    """Class for a structured triangular grids, composed of squares divided
     into two.
 
     For information on attributes and methods, see the documentation of the
@@ -127,6 +131,7 @@ class StructuredTriangleGrid(TriangleGrid):
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, nx, physdims=None):
         """
         Construct a triangular grid by splitting Cartesian cells in two.
@@ -179,7 +184,7 @@ class StructuredTriangleGrid(TriangleGrid):
         tri = tri_base
 
         # Loop over all remaining rows in the y-direction.
-        for iter1 in range(nx[1].astype("int64") - 1):
+        for iter1 in range(nx[1].astype(int) - 1):
             # The node numbers are increased by nx[0] + 1 for each row
             tri = np.hstack((tri, tri_base + (iter1 + 1) * (nx[0] + 1)))
 
@@ -187,13 +192,14 @@ class StructuredTriangleGrid(TriangleGrid):
 
 
 class TetrahedralGrid(Grid):
-    """ Class for Tetrahedral grids.
+    """Class for Tetrahedral grids.
 
     For information on attributes and methods, see the documentation of the
     parent Grid class.
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, p, tet=None, name=None):
         """
         Create a tetrahedral grid from a set of point and cells.
@@ -275,6 +281,7 @@ class TetrahedralGrid(Grid):
             3, nodes, face_nodes, cell_faces, "TetrahedralGrid"
         )
 
+    @pp.time_logger(sections=module_sections)
     def __permute_nodes(self, p, t):
         v = self.__triple_product(p, t)
         permute = np.where(v > 0)[0]
@@ -285,6 +292,7 @@ class TetrahedralGrid(Grid):
             t[:2, permute] = t[1::-1, permute]
         return t
 
+    @pp.time_logger(sections=module_sections)
     def __triple_product(self, p, t):
         px = p[0]
         py = p[1]
@@ -306,7 +314,7 @@ class TetrahedralGrid(Grid):
 
 
 class StructuredTetrahedralGrid(TetrahedralGrid):
-    """ Class for a structured triangular grids, composed of squares divided
+    """Class for a structured triangular grids, composed of squares divided
     into two.
 
     For information on attributes and methods, see the documentation of the
@@ -314,6 +322,7 @@ class StructuredTetrahedralGrid(TetrahedralGrid):
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, nx, physdims=None):
         """
         Construct a triangular grid by splitting Cartesian cells in two.
@@ -331,7 +340,7 @@ class StructuredTetrahedralGrid(TetrahedralGrid):
         physdims (np.ndarray, size 2): domain size. Defaults to nx,
         thus Cartesian cells are unit squares
         """
-        nx = np.asarray(nx)
+        nx = np.asarray(nx).astype(int)
         assert nx.size == 3
 
         if physdims is None:
@@ -400,8 +409,8 @@ class StructuredTetrahedralGrid(TetrahedralGrid):
         # so pre-allocation is possible if this turns out to be a bottleneck
 
         # Loop over all remaining rows in the y-direction.
-        for iter2 in range(nx[2].astype("int64")):
-            for iter1 in range(nx[1].astype("int64")):
+        for iter2 in range(nx[2].astype(int)):
+            for iter1 in range(nx[1].astype(int)):
                 increment = iter2 * nxy + iter1 * (nx[0] + 1)
                 if iter2 == 0 and iter1 == 0:
                     tet = tet_base + increment

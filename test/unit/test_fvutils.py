@@ -1,14 +1,16 @@
 from __future__ import division
-import numpy as np
+
 import unittest
 
+import numpy as np
+
+from porepy.grids import simplex, structured
 from porepy.numerics.fv import fvutils
-from porepy.grids import structured, simplex
 
 
 class TestFvutils(unittest.TestCase):
     def test_subcell_topology_2d_cart_1(self):
-        x = np.ones(2, dtype=np.int)
+        x = np.ones(2, dtype=int)
         g = structured.CartGrid(x)
 
         subcell_topology = fvutils.SubcellTopology(g)
@@ -69,3 +71,7 @@ class TestFvutils(unittest.TestCase):
         self.assertTrue(fvutils.determine_eta(g) == 1 / 3)
         g = structured.CartGrid([1, 1])
         self.assertTrue(fvutils.determine_eta(g) == 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -5,45 +5,53 @@ Various methods to refine a grid.
 
 Created on Sat Nov 11 17:06:37 2017
 
-@author: Eirik Keilegavlen
 """
+import abc
+from pathlib import Path
+from typing import Dict, Optional, Tuple, Union
+
+import gmsh
 import numpy as np
 import scipy.sparse as sps
 
 import porepy as pp
-
 from porepy.grids.grid import Grid
-from porepy.grids.structured import TensorGrid
 from porepy.grids.simplex import TriangleGrid
+from porepy.grids.structured import TensorGrid
+
+module_sections = ["grids", "gridding"]
 
 
-def distort_grid_1d(g, ratio=0.1, fixed_nodes=None):
-    """ Randomly distort internal nodes in a 1d grid.
+@pp.time_logger(sections=module_sections)
+def distort_grid_1d(
+    g: pp.Grid, ratio: Optional[float] = 0.1, fixed_nodes: Optional[np.ndarray] = None
+) -> pp.Grid:
+    """Randomly distort internal nodes in a 1d grid.
 
-     The boundary nodes are left untouched.
+    The boundary nodes are left untouched.
 
-     The perturbations will not perturb the topology of the mesh.
+    The perturbations will not perturb the topology of the mesh.
 
-     Parameters:
-          g (grid): To be perturbed. Modifications will happen in place.
-          ratio (optional, defaults to 0.1): Perturbation ratio. A node can be
-               moved at most half the distance in towards any of its
-               neighboring nodes. The ratio will multiply the chosen
-               distortion. Should be less than 1 to preserve grid topology.
-          fixed_nodes (np.array): Index of nodes to keep fixed under
-              distortion. Boundary nodes will always be fixed, even if not
-              expli)itly included as fixed_node
+    Parameters:
+         g (pp.grid): To be perturbed. Modifications will happen in place.
+         ratio (int, optional, defaults to 0.1): Perturbation ratio. A node can be
+              moved at most half the distance in towards any of its
+              neighboring nodes. The ratio will multiply the chosen
+              distortion. Should be less than 1 to preserve grid topology.
+         fixed_nodes (np.array, optional): Index of nodes to keep fixed under
+             distortion. Boundary nodes will always be fixed, even if not
+             expli)itly included as fixed_node
 
-     Returns:
-          grid: With distorted nodes
+    Returns:
+         grid: With distorted nodes
 
-     """
+    """
     if fixed_nodes is None:
-        fixed_nodes = np.array([0, g.num_nodes - 1], dtype=np.int)
+        fixed_nodes = np.array([0, g.num_nodes - 1], dtype=int)
     else:
         # Ensure that boundary nodes are also fixed
         fixed_nodes = np.hstack((fixed_nodes, np.array([0, g.num_nodes - 1])))
-        fixed_nodes = np.unique(fixed_nodes).astype(np.int)
+        fixed_nodes = np.unique(fixed_nodes).astype(int)
 
     g.compute_geometry()
     r = ratio * (0.5 - np.random.random(g.num_nodes - 2))
@@ -55,11 +63,12 @@ def distort_grid_1d(g, ratio=0.1, fixed_nodes=None):
     return g
 
 
-def refine_grid_1d(g, ratio=2):
-    """ Refine cells in a 1d grid.
+@pp.time_logger(sections=module_sections)
+def refine_grid_1d(g: pp.Grid, ratio: int = 2) -> pp.Grid:
+    """Refine cells in a 1d grid.
 
     Parameters:
-        g (grid): A 1d grid, to be refined.
+        g (pp.Grid): A 1d grid, to be refined.
         ratio (int):
 
     Returns:
@@ -86,9 +95,9 @@ def refine_grid_1d(g, ratio=2):
     # Array that indicates whether an item in the cell-node relation represents
     # a node not listed before (e.g. whether this is the first or second
     # occurence of the cell)
-    if_add = np.r_[1, np.ediff1d(cell_nodes.indices)].astype(np.bool)
+    if_add = np.r_[1, np.ediff1d(cell_nodes.indices)].astype(bool)
 
-    indices = np.empty(0, dtype=np.int)
+    indices = np.empty(0, dtype=int)
     # Template array of node indices for refined cells
     ind = np.vstack((np.arange(ratio), np.arange(ratio) + 1)).flatten("F")
     nd = np.r_[np.diff(cell_nodes.indices)[1::2], 0]
@@ -127,7 +136,7 @@ def refine_grid_1d(g, ratio=2):
     face_nodes = sps.identity(x.shape[1], format="csc")
     cell_faces = sps.csc_matrix(
         (
-            np.ones(indices.size, dtype=np.bool),
+            np.ones(indices.size, dtype=bool),
             indices,
             np.arange(0, indices.size + 1, 2),
         )
@@ -138,8 +147,9 @@ def refine_grid_1d(g, ratio=2):
     return g
 
 
-def refine_triangle_grid(g):
-    """ Uniform refinement of triangle grid, all cells are split into four
+@pp.time_logger(sections=module_sections)
+def refine_triangle_grid(g: pp.TriangleGrid) -> Tuple[pp.TriangleGrid, np.ndarray]:
+    """Uniform refinement of triangle grid, all cells are split into four
     subcells by combining existing nodes and face centrers.
 
     Implementation note: It should be fairly straighforward to extend the
@@ -148,7 +158,7 @@ def refine_triangle_grid(g):
     by faces may be a bit tricky.
 
     Parameters:
-        g TriangleGrid. To be refined.
+        g (pp.TriangleGrid). To be refined.
 
     Returns:
         TriangleGrid: New grid, with nd+2 times as many cells as g.
@@ -172,7 +182,7 @@ def refine_triangle_grid(g):
     binom = ((0, 1), (1, 2), (2, 0))
 
     # Holder for new tessalation.
-    new_tri = np.empty(shape=(nd + 1, g.num_cells, nd + 2), dtype=np.int)
+    new_tri = np.empty(shape=(nd + 1, g.num_cells, nd + 2), dtype=int)
 
     # Loop over combinations
     for ti, b in enumerate(binom):
@@ -209,24 +219,22 @@ def refine_triangle_grid(g):
     return TriangleGrid(new_nodes, tri=new_tri, name=name), parent
 
 
-# ------------------------------------------------------------------------------#
-
-
-def remesh_1d(g_old, num_nodes, tol=1e-6):
-    """ Create a new 1d mesh covering the same domain as an old one.
+@pp.time_logger(sections=module_sections)
+def remesh_1d(g_old: pp.Grid, num_nodes: int, tol: Optional[float] = 1e-6) -> pp.Grid:
+    """Create a new 1d mesh covering the same domain as an old one.
 
     The new grid is equispaced, and there is no guarantee that the nodes in
     the old and new grids are coincinding. Use with care, in particular for
     grids with internal boundaries.
 
     Parameters:
-        g_old (grid): 1d grid to be replaced.
+        g_old (pp.Grid): 1d grid to be replaced.
         num_nodes (int): Number of nodes in the new grid.
         tol (double, optional): Tolerance used to compare node coornidates
             (for mapping of boundary conditions). Defaults to 1e-6.
 
     Returns:
-        grid: New grid.
+        pp.Grid: New grid.
 
     """
 
@@ -267,4 +275,143 @@ def remesh_1d(g_old, num_nodes, tol=1e-6):
     return g
 
 
-# ------------------------------------------------------------------------------#
+class GridSequenceIterator:
+    @pp.time_logger(sections=module_sections)
+    def __init__(self, factory):
+        self._factory = factory
+        self._counter = 0
+
+    @pp.time_logger(sections=module_sections)
+    def __next__(self):
+        if self._counter >= self._factory._num_refinements:
+            self._factory.close()
+            raise StopIteration()
+
+        else:
+            gb = self._factory._generate(self._counter)
+            self._counter += 1
+            return gb
+
+
+class GridSequenceFactory(abc.ABC):
+    """Factory class to generate a set of refined grids.
+
+    To define new refinement types, inherit from this class and override the _generate()
+    method.
+
+    The class can be used in (for now) two ways: Either by nested or unstructured
+    refinement. This is set by setting the parameter 'mode' to 'nested' or
+    'unstructured', respectively.
+
+    The number of refinemnet is set by the parameter 'num_refinements'.
+
+    Mesh sizes is set by the standard FractureNetwork.mesh() arguments 'mesh_size_fracs'
+    and 'mesh_size_bound'. These are set by the parameter 'mesh_param'. If the mode is
+    'nested', 'mesh_param' should be a single dictionary; subsequent mesh refinements
+    are then set by nested refinement. If the mode is 'unstructured', mesh_params should
+    be a list, where each list element is a dictionary with mesh size parameters to be
+    passed to the FractureNetwork.
+
+    Further argument, such as fractures that are really constraints, can be given by
+    params['grid_params']. These are passed on the FractureNetwork.mesh(), essentially
+    as **kwargs.
+
+    Acknowledgement: The design idea and the majority of the code was contributed by
+        Haakon Ervik.
+
+    """
+
+    @pp.time_logger(sections=module_sections)
+    def __init__(
+        self, network: Union[pp.FractureNetwork2d, pp.FractureNetwork3d], params: Dict
+    ) -> None:
+        """
+        Construct a GridSequenceFactory.
+
+        Args:
+            network (Union[pp.FractureNetwork2d, pp.FractureNetwork3d]): Define domain
+                to be discretized.
+            params (Dict): Parameter dictionary. See class documentation for details.
+
+        """
+        self._network = network.copy()
+        self._counter = 0
+        self._set_parameters(params)
+
+        if isinstance(network, pp.FractureNetwork2d):
+            self.dim = 2
+        elif isinstance(network, pp.FractureNetwork3d):
+            self.dim = 3
+        else:
+            raise ValueError("Invalid type for fracture network")
+
+        if self._refinement_mode == "nested":
+            self._prepare_nested()
+
+    @pp.time_logger(sections=module_sections)
+    def __iter__(self):
+        return GridSequenceIterator(self)
+
+    @pp.time_logger(sections=module_sections)
+    def close(self):
+        if hasattr(self, "_gmsh"):
+            self._gmsh.finalize()
+
+    @pp.time_logger(sections=module_sections)
+    def _generate(self, counter):
+        if self._refinement_mode == "nested":
+            return self._generate_nested(counter)
+        elif self._refinement_mode == "unstructured":
+            return self._generate_unstructured(counter)
+
+    @pp.time_logger(sections=module_sections)
+    def _prepare_nested(self):
+        # Operate on a deep copy of the network to avoid that fractures etc. are
+        # unintentionally modified during operations.
+        net = self._network.copy()
+
+        file_name = "gmsh_convergence"
+        # Generate data in a format suitable for defining a model in gmsh
+        gmsh_data = net.prepare_for_gmsh(
+            self._mesh_parameters,
+            **self._grid_parameters,
+        )
+        # Initialize gmsh model with the relevant data. The data will be accessible
+        # in gmsh.model.mesh (that is the way the Gmsh Python API works)
+        pp.fracs.gmsh_interface.GmshWriter(gmsh_data)
+        # Generate the first grid
+        gmsh.model.mesh.generate(dim=self.dim)
+        self._out_file = file_name
+        self._gmsh = gmsh
+
+    @pp.time_logger(sections=module_sections)
+    def _generate_nested(self, counter: int):
+        out_file = Path(self._out_file)
+        out_file = out_file.parent / out_file.stem
+        out_file_name = f"{out_file}_{counter}.msh"
+
+        # The first mesh is already done. Start refining all subsequent meshes.
+        self._gmsh.model.mesh.refine()  # Refine the mesh
+
+        self._gmsh.write(out_file_name)  # Write the result to '.msh' file
+
+        gb = pp.fracture_importer.dfm_from_gmsh(out_file_name, self.dim)
+        pp.contact_conditions.set_projections(gb)
+        return gb
+
+    @pp.time_logger(sections=module_sections)
+    def _generate_unstructured(self, counter: int):
+        net = self._network.copy()
+        mesh_args = self._mesh_parameters[counter]
+        grid_param = self._grid_parameters
+        gb = net.mesh(mesh_args, **grid_param)
+        return gb
+
+    @pp.time_logger(sections=module_sections)
+    def _set_parameters(self, param):
+        self._refinement_mode = param["mode"]
+
+        self._num_refinements = param["num_refinements"]
+
+        self._mesh_parameters = param["mesh_param"]
+        self._grid_parameters = param.get("grid_param", {})

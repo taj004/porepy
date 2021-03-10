@@ -1,6 +1,7 @@
+import unittest
+
 import numpy as np
 import scipy.sparse as sps
-import unittest
 
 import porepy as pp
 
@@ -140,7 +141,7 @@ class RobinBoundTest(unittest.TestCase):
         bnd = pp.BoundaryCondition(g, bnd_ind, names)
 
         bnd.robin_weight = robin_weight * np.ones(g.num_faces)
-        flux, bound_flux, _, _ = pp.Mpfa("flow")._local_discr(
+        flux, bound_flux, *_ = pp.Mpfa("flow")._flux_discretization(
             g, k, bnd, inverter="python"
         )
 
@@ -170,7 +171,8 @@ class RobinBoundTest(unittest.TestCase):
         self, g, k, bnd, robin_weight, p_bound, rob_bound, dir_ind, rob_ind, p_ex, u_ex
     ):
         bnd.robin_weight = robin_weight * np.ones(g.num_faces)
-        flux, bound_flux, _, _ = pp.Mpfa("Flow")._local_discr(
+
+        flux, bound_flux, *_ = pp.Mpfa("Flow")._flux_discretization(
             g, k, bnd, inverter="python"
         )
 

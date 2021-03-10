@@ -1,9 +1,10 @@
-import numpy as np
-import scipy.sparse as sps
 import unittest
 
-from porepy.ad.forward_mode import Ad_array
-from porepy.ad import functions as af
+import numpy as np
+import scipy.sparse as sps
+
+from porepy.numerics.ad.forward_mode import Ad_array
+from porepy.numerics.ad import functions as af
 
 
 class AdFunctionTest(unittest.TestCase):

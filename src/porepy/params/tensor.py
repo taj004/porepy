@@ -7,20 +7,24 @@ Created on Sat Feb 27 20:22:25 2016
 The tensor module contains classes for second and fourth order tensors,
 intended e.g. for representation of permeability and stiffness, respectively.
 """
-import copy
 import numpy as np
+
+import porepy as pp
+
+module_sections = ["parameters"]
 
 
 class SecondOrderTensor(object):
-    """ Cell-wise permeability represented by (3 ,3 ,Nc)-matrix.
+    """Cell-wise permeability represented by (3 ,3 ,Nc)-matrix.
 
     The permeability is always 3-dimensional (since the geometry is always 3D),
     however, 1D and 2D problems are accomodated by assigning unit values to kzz
     and kyy, and no cross terms.
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, kxx, kyy=None, kzz=None, kxy=None, kxz=None, kyz=None):
-        """ Initialize permeability
+        """Initialize permeability
 
         Parameters:
             kxx (double): Nc array, with cell-wise values of kxx permeability.
@@ -35,7 +39,7 @@ class SecondOrderTensor(object):
 
         Raises:
             ValueError if the permeability is not positive definite.
-       """
+        """
         Nc = kxx.size
         perm = np.zeros((3, 3, Nc))
 
@@ -99,6 +103,7 @@ class SecondOrderTensor(object):
 
         self.values = perm
 
+    @pp.time_logger(sections=module_sections)
     def copy(self):
         """
         Define a deep copy of the tensor.
@@ -118,6 +123,7 @@ class SecondOrderTensor(object):
 
         return SecondOrderTensor(kxx, kxy=kxy, kxz=kxz, kyy=kyy, kyz=kyz, kzz=kzz)
 
+    @pp.time_logger(sections=module_sections)
     def rotate(self, R):
         """
         Rotate the permeability given a rotation matrix.
@@ -132,7 +138,7 @@ class SecondOrderTensor(object):
 
 
 class FourthOrderTensor(object):
-    """ Cell-wise representation of fourth order tensor.
+    """Cell-wise representation of fourth order tensor.
 
     For each cell, there are dim^4 degrees of freedom, stored in a
     3^2 * 3^2 matrix (exactly how to convert between 2D and 4D matrix
@@ -154,8 +160,9 @@ class FourthOrderTensor(object):
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, mu, lmbda, phi=None):
-        """ Constructor for fourth order tensor on Lame-parameter form
+        """Constructor for fourth order tensor on Lame-parameter form
 
         Parameters
         ----------
@@ -238,5 +245,8 @@ class FourthOrderTensor(object):
         c = mu_mat * mu + lmbda_mat * lmbda + phi_mat * phi
         self.values = c
 
+    @pp.time_logger(sections=module_sections)
     def copy(self):
-        return FourthOrderTensor(mu=self.mu, lmbda=self.lmbda)
+        C = FourthOrderTensor(mu=self.mu, lmbda=self.lmbda)
+        C.values = self.values.copy()
+        return C

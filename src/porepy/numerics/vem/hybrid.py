@@ -3,16 +3,18 @@
 
 @author: fumagalli, alessio
 """
-import warnings
 import numpy as np
-from numpy.linalg import solve
 import scipy.sparse as sps
+from numpy.linalg import solve
 
 import porepy as pp
+from porepy.numerics.vem.dual_elliptic import DualElliptic
+
+module_sections = ["numerics", "discretization", "assembly"]
 
 
 class HybridDualVEM:
-    """ Implementation of mixed virtual element method, using hybridization to
+    """Implementation of mixed virtual element method, using hybridization to
     arrive at a SPD system.
 
     WARNING: The implementation does not follow the newest formulations used
@@ -23,9 +25,11 @@ class HybridDualVEM:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, keyword="flow"):
         self.keyword = keyword
 
+    @pp.time_logger(sections=module_sections)
     def ndof(self, g):
         """
         Return the number of degrees of freedom associated to the method.
@@ -44,6 +48,7 @@ class HybridDualVEM:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def matrix_rhs(self, g, data):
         """
         Return the matrix and righ-hand side for a discretization of a second
@@ -117,14 +122,22 @@ class HybridDualVEM:
         # Allocate the data to store matrix entries, that's the most efficient
         # way to create a sparse matrix.
         size = np.sum(np.square(g.cell_faces.indptr[1:] - g.cell_faces.indptr[:-1]))
-        I = np.empty(size, dtype=np.int)
-        J = np.empty(size, dtype=np.int)
+        row = np.empty(size, dtype=int)
+        col = np.empty(size, dtype=int)
         data = np.empty(size)
         rhs = np.zeros(g.num_faces)
 
         idx = 0
         # Use a dummy keyword to trick the constructor of dualVEM.
         massHdiv = pp.MVEM("dummy").massHdiv
+
+        # define the function to compute the inverse of the permeability matrix
+        if g.dim == 1:
+            inv_matrix = DualElliptic._inv_matrix_1d
+        elif g.dim == 2:
+            inv_matrix = DualElliptic._inv_matrix_2d
+        elif g.dim == 3:
+            inv_matrix = DualElliptic._inv_matrix_3d
 
         for c in np.arange(g.num_cells):
             # For the current cell retrieve its faces
@@ -141,6 +154,7 @@ class HybridDualVEM:
             # Compute the H_div-mass local matrix
             A = massHdiv(
                 k.values[0 : g.dim, 0 : g.dim, c],
+                inv_matrix(k.values[0 : g.dim, 0 : g.dim, c]),
                 c_centers[:, c],
                 a[c] * g.cell_volumes[c],
                 f_centers[:, faces_loc],
@@ -166,15 +180,15 @@ class HybridDualVEM:
             ]
 
             # Save values for hybrid matrix
-            cols = np.tile(faces_loc, (faces_loc.size, 1))
-            loc_idx = slice(idx, idx + cols.size)
-            I[loc_idx] = cols.T.ravel()
-            J[loc_idx] = cols.ravel()
+            indices = np.tile(faces_loc, (faces_loc.size, 1))
+            loc_idx = slice(idx, idx + indices.size)
+            row[loc_idx] = indices.T.ravel()
+            col[loc_idx] = indices.ravel()
             data[loc_idx] = L.ravel()
-            idx += cols.size
+            idx += indices.size
 
         # construct the global matrices
-        H = sps.coo_matrix((data, (I, J))).tocsr()
+        H = sps.coo_matrix((data, (row, col))).tocsr()
 
         # Apply the boundary conditions
         if bc is not None:
@@ -198,14 +212,15 @@ class HybridDualVEM:
 
     # ------------------------------------------------------------------------------#
 
-    def compute_up(self, g, l, data):
+    @pp.time_logger(sections=module_sections)
+    def compute_up(self, g, solution, data):
         """
         Return the velocity and pressure computed from the hybrid variables.
 
         Parameters
         ----------
         g : grid, or a subclass, with geometry fields computed.
-        l : array (g.num_faces) Hybrid solution of the system.
+        solution : array (g.num_faces) Hybrid solution of the system.
         data: dictionary to store the data. See self.matrix_rhs for a detaild
             description.
 
@@ -218,7 +233,7 @@ class HybridDualVEM:
         # pylint: disable=invalid-name
 
         if g.dim == 0:
-            return 0, l[0]
+            return 0, solution[0]
 
         param = data["param"]
         k = param.get_tensor(self)
@@ -229,7 +244,7 @@ class HybridDualVEM:
 
         # Map the domain to a reference geometry (i.e. equivalent to compute
         # surface coordinates in 1d and 2d)
-        c_centers, f_normals, f_centers, _, _, _ = cg.map_grid(g)
+        c_centers, f_normals, f_centers, _, _, _ = pp.map_geometry.map_grid(g)
 
         # Weight for the stabilization term
         diams = g.cell_diameters()
@@ -238,7 +253,7 @@ class HybridDualVEM:
         # Allocation of the pressure and velocity vectors
         p = np.zeros(g.num_cells)
         u = np.zeros(g.num_faces)
-        massHdiv = dual.DualVEM().massHdiv
+        massHdiv = pp.DualVEM().massHdiv
 
         for c in np.arange(g.num_cells):
             # For the current cell retrieve its faces
@@ -270,7 +285,7 @@ class HybridDualVEM:
 
             # Perform the static condensation to compute the pressure and velocity
             S = 1 / np.dot(B.T, solve(A, B))
-            l_loc = l[faces_loc].reshape((-1, 1))
+            l_loc = solution[faces_loc].reshape((-1, 1))
 
             p[c] = np.dot(S, f[c] - np.dot(B.T, solve(A, np.dot(C, l_loc))))
             u[faces_loc] = -np.multiply(

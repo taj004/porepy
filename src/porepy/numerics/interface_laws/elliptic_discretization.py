@@ -7,10 +7,20 @@ The classes may be interpreted as a "contract" which elliptic discretization met
 must honor. This is particularly useful to ensure uniformity when coupling
 discretizations between dimensions by interface laws.
 """
+from abc import abstractmethod
+from typing import Dict
+
+import numpy as np
+import scipy.sparse as sps
+
+import porepy as pp
+from porepy.numerics.discretization import Discretization
+
+module_sections = ["numerics"]
 
 
-class EllipticDiscretization:
-    """ This is the parent class of all discretizations for second order elliptic
+class EllipticDiscretization(Discretization):
+    """This is the parent class of all discretizations for second order elliptic
     problems. The class cannot be used itself, but should rather be seen as a
     declaration of which methods are assumed implemented for all specific
     discretization schemes.
@@ -41,8 +51,9 @@ class EllipticDiscretization:
 
     """
 
-    def __init__(self, keyword):
-        """ Set the discretization, with the keyword used for storing various
+    @pp.time_logger(sections=module_sections)
+    def __init__(self, keyword: str) -> None:
+        """Set the discretization, with the keyword used for storing various
         information associated with the discretization.
 
         Paramemeters:
@@ -51,8 +62,9 @@ class EllipticDiscretization:
         """
         self.keyword = keyword
 
-    def _key(self):
-        """ Get the keyword of this object, on a format friendly to access relevant
+    @pp.time_logger(sections=module_sections)
+    def _key(self) -> str:
+        """Get the keyword of this object, on a format friendly to access relevant
         fields in the data dictionary
 
         Returns:
@@ -61,8 +73,10 @@ class EllipticDiscretization:
         """
         return self.keyword + "_"
 
-    def ndof(self, g):
-        """ Abstract method. Return the number of degrees of freedom associated to the
+    @abstractmethod
+    @pp.time_logger(sections=module_sections)
+    def ndof(self, g: pp.Grid) -> int:
+        """Abstract method. Return the number of degrees of freedom associated to the
         method.
 
         Parameters
@@ -72,10 +86,11 @@ class EllipticDiscretization:
             int: the number of degrees of freedom.
 
         """
-        raise NotImplementedError("Method not implemented")
+        pass
 
+    @pp.time_logger(sections=module_sections)
     def extract_pressure(self, g, solution_array, data):
-        """ Abstract method. Extract the pressure part of a solution.
+        """Abstract method. Extract the pressure part of a solution.
 
         The implementation will depend what the primary variables of the specific
         implementation are.
@@ -94,10 +109,12 @@ class EllipticDiscretization:
         """
         raise NotImplementedError("Method not implemented")
 
+    @pp.time_logger(sections=module_sections)
     def extract_flux(self, g, solution_array, data):
-        """ Abstract method. Extract the pressure part of a solution.
+        """Abstract method. Extract the pressure part of a solution.
 
-        The implementation will depend what are the primary variables of the specific implementation.
+        The implementation will depend what are the primary variables of the specific
+        implementation.
 
         TODO: We should incrude the boundary condition as well?
 
@@ -114,72 +131,20 @@ class EllipticDiscretization:
         """
         raise NotImplementedError("Method not implemented")
 
-    def assemble_matrix_rhs(self, g, data):
-        """ Return the matrix and right-hand side for a discretization of a second
-        order elliptic equation.
-
-        Also discretize the necessary operators if the data dictionary does not
-        contain the necessary fields. The decision on whether to discretize
-        will depend on the specific numerical method.
-
-        Parameters:
-            g (Grid): Computational grid, with geometry fields computed.
-            data (dictionary): With data stored.
-
-        Returns:
-            scipy.sparse.csr_matrix: System matrix of this discretization. The
-                size of the matrix will depend on the specific discretization.
-            np.ndarray: Right hand side vector with representation of boundary
-                conditions. The size of the vector will depend on the
-                discretization.
-
-        """
-        raise NotImplementedError("Method not implemented")
-
-    def assemble_matrix(self, g, data):
-        """ Return the matrix for a discretization of a second order elliptic equation.
-
-        Also discretize the necessary operators if the data dictionary does not
-        contain the necessary fields. The decision on whether to discretize
-        will depend on the specific numerical method.
-
-        Parameters:
-            g (Grid): Computational grid, with geometry fields computed.
-            data (dictionary): With data stored.
-
-        Returns:
-            scipy.sparse.csr_matrix: System matrix of this discretization. The
-                size of the matrix will depend on the specific discretization.
-
-        """
-        raise NotImplementedError("Method not implemented")
-
-    # ------------------------------------------------------------------------------#
-
-    def assemble_rhs(self, g, data):
-        """ Return the right-hand side for a discretization of a second
-        order elliptic equation.
-
-        Also discretize the necessary operators if the data dictionary does not
-        contain the necessary fields. The decision on whether to discretize
-        will depend on the specific numerical method.
-
-        Parameters:
-            g (Grid): Computational grid, with geometry fields computed.
-            data (dictionary): With data stored.
-
-        Returns:
-            np.ndarray: Right hand side vector with representation of boundary
-                conditions. The size of the vector will depend on the
-                discretization.
-
-        """
-        raise NotImplementedError("Method not implemented")
-
+    @abstractmethod
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_flux(
-        self, g, data, data_edge, cc, matrix, self_ind, use_slave_proj
-    ):
-        """ Abstract method. Assemble the contribution from an internal
+        self,
+        g: pp.Grid,
+        data: Dict,
+        data_edge: Dict,
+        cc: np.ndarray,
+        matrix: np.ndarray,
+        rhs: np.ndarray,
+        self_ind: int,
+        use_secondary_proj: bool = False,
+    ) -> None:
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a flux boundary condition.
 
         The intended use is when the internal boundary is coupled to another
@@ -197,23 +162,34 @@ class EllipticDiscretization:
             data_edge (dictionary): Data dictionary for the edge in the
                 mixed-dimensional grid.
             grid_swap (boolean): If True, the grid g is identified with the @
-                slave side of the mortar grid in data_adge.
+                secondary side of the mortar grid in data_adge.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
             self_ind (int): Index in cc and matrix associated with this node.
                 Should be either 1 or 2.
-            use_slave_proj (boolean): If True, the slave side projection operator is
+            use_secondary_proj (boolean): If True, the secondary side projection operator is
                 used. Needed for periodic boundary conditions.
 
         """
-        raise NotImplementedError("Method not implemented")
+        pass
 
-    def assemble_int_bound_source(self, g, data, data_edge, cc, matrix, rhs, self_ind):
-        """ Abstract method. Assemble the contribution from an internal
+    @abstractmethod
+    @pp.time_logger(sections=module_sections)
+    def assemble_int_bound_source(
+        self,
+        g: pp.Grid,
+        data: Dict,
+        data_edge: Dict,
+        cc: np.ndarray,
+        matrix: np.ndarray,
+        rhs: np.ndarray,
+        self_ind: int,
+    ) -> None:
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a source term.
 
         The intended use is when the internal boundary is coupled to another
@@ -231,10 +207,10 @@ class EllipticDiscretization:
             data_edge (dictionary): Data dictionary for the edge in the
                 mixed-dimensional grid.
             grid_swap (boolean): If True, the grid g is identified with the @
-                slave side of the mortar grid in data_adge.
+                secondary side of the mortar grid in data_adge.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -242,12 +218,22 @@ class EllipticDiscretization:
                 Should be either 1 or 2.
 
         """
-        raise NotImplementedError("Method not implemented")
+        pass
 
+    @abstractmethod
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_pressure_trace(
-        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_slave_proj
-    ):
-        """ Abstract method. Assemble the contribution from an internal
+        self,
+        g: pp.Grid,
+        data: Dict,
+        data_edge: Dict,
+        cc: np.ndarray,
+        matrix: np.ndarray,
+        rhs: np.ndarray,
+        self_ind: int,
+        use_secondary_proj: bool = False,
+    ) -> None:
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a condition on the boundary pressure.
 
         The intended use is when the internal boundary is coupled to another
@@ -265,10 +251,10 @@ class EllipticDiscretization:
             data_edge (dictionary): Data dictionary for the edge in the
                 mixed-dimensional grid.
             grid_swap (boolean): If True, the grid g is identified with the @
-                slave side of the mortar grid in data_adge.
+                secondary side of the mortar grid in data_adge.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -276,16 +262,25 @@ class EllipticDiscretization:
                 the two adjacent nodes.
             self_ind (int): Index in cc and matrix associated with this node.
                 Should be either 1 or 2.
-            use_slave_proj (boolean): If True, the slave side projection operator is
+            use_secondary_proj (boolean): If True, the secondary side projection operator is
                 used. Needed for periodic boundary conditions.
 
         """
-        raise NotImplementedError("Method not implemented")
+        pass
 
+    @abstractmethod
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_pressure_trace_between_interfaces(
-        self, g, data_grid, proj_primary, proj_secondary, cc, matrix, rhs
-    ):
-        """ Assemble the contribution from an internal
+        self,
+        g: pp.Grid,
+        data_grid: Dict,
+        proj_primary: sps.spmatrix,
+        proj_secondary: sps.spmatrix,
+        cc: np.ndarray,
+        matrix: np.ndarray,
+        rhs: np.ndarray,
+    ) -> None:
+        """Assemble the contribution from an internal
         boundary, manifested as a condition on the boundary pressure.
 
         Parameters:
@@ -294,25 +289,34 @@ class EllipticDiscretization:
                 mixed-dimensional grid.
            proj_primary (sparse matrix): Pressure projection from the higher-dim
                 grid to the primary mortar grid.
-            proj_secondary (sparse matrix): Flux projection from the secondary mortar
+           proj_secondary (sparse matrix): Flux projection from the secondary mortar
                 grid to the main grid.
-            cc (block matrix, 3x3): Block matrix of size 3 x 3, whwere each block represents
-                coupling between variables on this interface. Index 0, 1 and 2
-                represent the master grid, the primary and secondary interface,
+           cc (block matrix, 3x3): Block matrix of size 3 x 3, whwere each block
+                represents coupling between variables on this interface. Index 0, 1 and
+                2 represent the primary grid, the primary and secondary interface,
                 respectively.
-            matrix (block matrix 3x3): Discretization matrix for the edge and
+           matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
-            rhs (block_array 3x1): Block matrix of size 3 x 1, representing the right hand
-                side of this coupling. Index 0, 1 and 2 represent the master grid,
+           rhs (block_array 3x1): Block matrix of size 3 x 1, representing the right
+                hand side of this coupling. Index 0, 1 and 2 represent the primary grid,
                 the primary and secondary interface, respectively.
 
         """
-        raise NotImplementedError("Method not implemented")
+        pass
 
+    @abstractmethod
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_pressure_cell(
-        self, g, data, data_edge, cc, matrix, rhs, self_ind
-    ):
-        """ Abstract method. Assemble the contribution from an internal
+        self,
+        g: pp.Grid,
+        data: Dict,
+        data_edge: Dict,
+        cc: np.ndarray,
+        matrix: np.ndarray,
+        rhs: np.ndarray,
+        self_ind: int,
+    ) -> None:
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a condition on the cell pressure.
 
         The intended use is when the internal boundary is coupled to another
@@ -331,7 +335,7 @@ class EllipticDiscretization:
                 mixed-dimensional grid.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -341,10 +345,14 @@ class EllipticDiscretization:
                 Should be either 1 or 2.
 
         """
-        raise NotImplementedError("Method not implemented")
+        pass
 
-    def enforce_neumann_int_bound(self, g, data_edge, matrix, self_ind):
-        """ Enforce Neumann boundary conditions on a given system matrix.
+    @abstractmethod
+    @pp.time_logger(sections=module_sections)
+    def enforce_neumann_int_bound(
+        self, g: pp.Grid, data_edge: Dict, matrix: np.ndarray, self_ind: int
+    ) -> None:
+        """Enforce Neumann boundary conditions on a given system matrix.
 
         Methods based on a mixed variational form will need this function to
         implement essential boundary conditions.
@@ -357,4 +365,4 @@ class EllipticDiscretization:
             matrix (scipy.sparse.matrix): Discretization matrix to be modified.
 
         """
-        raise NotImplementedError("Method not implemented")
+        pass

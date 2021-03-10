@@ -1,24 +1,43 @@
 """
 Module contains superclass for mpfa and tpfa.
 """
-import porepy as pp
 import numpy as np
 import scipy.sparse as sps
 
+import porepy as pp
+
+module_sections = ["numerics", "disrcetization"]
+
 
 class FVElliptic(pp.EllipticDiscretization):
-    """ Superclass for finite volume discretizations of the elliptic equation.
+    """Superclass for finite volume discretizations of the elliptic equation.
 
     Should not be used by itself, instead use a subclass that implements an
     actual discretization method. Known subclasses are Tpfa and Mpfa.
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, keyword):
 
         # Identify which parameters to use:
         self.keyword = keyword
 
+        # Keywords used to identify individual terms in the discretization matrix dictionary
+        # The flux discretization (transmissibility matrix)
+        self.flux_matrix_key = "flux"
+        # Discretization of boundary conditions.
+        self.bound_flux_matrix_key = "bound_flux"
+        # Contribution of cell center values in reconstruction of boundary pressures
+        self.bound_pressure_cell_matrix_key = "bound_pressure_cell"
+        # Contribution of boundary values (Neumann or Dirichlet, depending on the
+        # condition set on faces) in reconstruction of boundary pressures
+        self.bound_pressure_face_matrix_key = "bound_pressure_face"
+        # Discretization of vector source terms (gravity)
+        self.vector_source_matrix_key = "vector_source"
+        self.bound_pressure_vector_source_matrix_key = "bound_pressure_vector_source"
+
+    @pp.time_logger(sections=module_sections)
     def ndof(self, g):
         """
         Return the number of degrees of freedom associated to the method.
@@ -35,8 +54,9 @@ class FVElliptic(pp.EllipticDiscretization):
         """
         return g.num_cells
 
+    @pp.time_logger(sections=module_sections)
     def extract_pressure(self, g, solution_array, data):
-        """ Extract the pressure part of a solution.
+        """Extract the pressure part of a solution.
         The method is trivial for finite volume methods, with the pressure
         being the only primary variable.
 
@@ -52,8 +72,9 @@ class FVElliptic(pp.EllipticDiscretization):
         """
         return solution_array
 
+    @pp.time_logger(sections=module_sections)
     def extract_flux(self, g, solution_array, data):
-        """ Extract the flux related to a solution.
+        """Extract the flux related to a solution.
 
         The flux is computed from the discretization and the given pressure solution.
 
@@ -71,15 +92,16 @@ class FVElliptic(pp.EllipticDiscretization):
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
         parameter_dictionary = data[pp.PARAMETERS][self.keyword]
 
-        flux = matrix_dictionary["flux"].tocsr()
-        bound_flux = matrix_dictionary["bound_flux"].tocsr()
+        flux = matrix_dictionary[self.flux_matrix_key].tocsr()
+        bound_flux = matrix_dictionary[self.bound_flux_matrix_key].tocsr()
 
         bc_val = parameter_dictionary["bc_values"]
 
         return flux * solution_array + bound_flux * bc_val
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix_rhs(self, g, data):
-        """ Return the matrix and right-hand side for a discretization of a second
+        """Return the matrix and right-hand side for a discretization of a second
         order elliptic equation.
 
         Also discretize the necessary operators if the data dictionary does not
@@ -121,8 +143,9 @@ class FVElliptic(pp.EllipticDiscretization):
 
         return self.assemble_matrix(g, data), self.assemble_rhs(g, data)
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix(self, g, data):
-        """ Return the matrix for a discretization of a second order elliptic equation
+        """Return the matrix for a discretization of a second order elliptic equation
         using a FV method.
 
         Also discretize the necessary operators if the data dictionary does not contain
@@ -138,11 +161,9 @@ class FVElliptic(pp.EllipticDiscretization):
                 size of the matrix will depend on the specific discretization.
         """
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
-        if not "flux" in matrix_dictionary:
-            self.discretize(g, data)
-            
+
         div = pp.fvutils.scalar_divergence(g)
-        flux = matrix_dictionary["flux"]
+        flux = matrix_dictionary[self.flux_matrix_key]
         if flux.shape[0] != g.num_faces:
             hf2f = pp.fvutils.map_hf_2_f(nd=1, g=g)
             flux = hf2f * flux
@@ -151,8 +172,9 @@ class FVElliptic(pp.EllipticDiscretization):
 
         return M
 
+    @pp.time_logger(sections=module_sections)
     def assemble_rhs(self, g, data):
-        """ Return the right-hand side for a discretization of a second order elliptic
+        """Return the right-hand side for a discretization of a second order elliptic
         equation using a finite volume method.
 
         Also discretize the necessary operators if the data dictionary does not contain
@@ -168,10 +190,8 @@ class FVElliptic(pp.EllipticDiscretization):
                 conditions. The size of the vector will depend on the discretization.
         """
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
-        if not "bound_flux" in matrix_dictionary:
-            self.discretize(g, data)
 
-        bound_flux = matrix_dictionary["bound_flux"]
+        bound_flux = matrix_dictionary[self.bound_flux_matrix_key]
         if g.dim > 0 and bound_flux.shape[0] != g.num_faces:
             hf2f = pp.fvutils.map_hf_2_f(nd=1, g=g)
             bound_flux = hf2f * bound_flux
@@ -182,10 +202,21 @@ class FVElliptic(pp.EllipticDiscretization):
 
         div = g.cell_faces.T
 
-        return -div * bound_flux * bc_val
+        val = -div * bound_flux * bc_val
 
+        # Also assemble vector sources.
+        # Discretization of the vector source term if specified
+
+        if "vector_source" in parameter_dictionary:
+            vector_source_discr = matrix_dictionary[self.vector_source_matrix_key]
+            vector_source = parameter_dictionary.get("vector_source")
+            val -= div * vector_source_discr * vector_source
+
+        return val
+
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_flux(
-        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_slave_proj=False
+        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_secondary_proj=False
     ):
         """Assemble the contribution from an internal boundary, manifested as a
         flux boundary condition.
@@ -206,7 +237,7 @@ class FVElliptic(pp.EllipticDiscretization):
                 mixed-dimensional grid.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -214,20 +245,22 @@ class FVElliptic(pp.EllipticDiscretization):
                 the two adjacent nodes.
             self_ind (int): Index in cc and matrix associated with this node.
                 Should be either 1 or 2.
-            use_slave_proj (boolean): If True, the slave side projection operator is
+            use_secondary_proj (boolean): If True, the secondary side projection operator is
                 used. Needed for periodic boundary conditions.
 
         """
         div = g.cell_faces.T
 
-        bound_flux = data[pp.DISCRETIZATION_MATRICES][self.keyword]["bound_flux"]
+        bound_flux = data[pp.DISCRETIZATION_MATRICES][self.keyword][
+            self.bound_flux_matrix_key
+        ]
         # Projection operators to grid
         mg = data_edge["mortar_grid"]
 
-        if use_slave_proj:
-            proj = mg.mortar_to_slave_int()
+        if use_secondary_proj:
+            proj = mg.mortar_to_secondary_int()
         else:
-            proj = mg.mortar_to_master_int()
+            proj = mg.mortar_to_primary_int()
 
         if g.dim > 0 and bound_flux.shape[0] != g.num_faces:
             # If bound flux is gven as sub-faces we have to map it from sub-faces
@@ -242,8 +275,9 @@ class FVElliptic(pp.EllipticDiscretization):
 
         cc[self_ind, 2] += div * bound_flux * proj
 
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_source(self, g, data, data_edge, cc, matrix, rhs, self_ind):
-        """ Abstract method. Assemble the contribution from an internal
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a source term.
 
         The intended use is when the internal boundary is coupled to another
@@ -262,7 +296,7 @@ class FVElliptic(pp.EllipticDiscretization):
                 mixed-dimensional grid.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -274,14 +308,25 @@ class FVElliptic(pp.EllipticDiscretization):
         """
         mg = data_edge["mortar_grid"]
 
-        proj = mg.mortar_to_slave_int()
+        proj = mg.mortar_to_secondary_int()
 
         cc[self_ind, 2] -= proj
 
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_pressure_trace(
-        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_slave_proj=False
+        self,
+        g,
+        data,
+        data_edge,
+        cc,
+        matrix,
+        rhs,
+        self_ind,
+        use_secondary_proj=False,
+        assemble_matrix=True,
+        assemble_rhs=True,
     ):
-        """ Assemble the contribution from an internal
+        """Assemble the contribution from an internal
         boundary, manifested as a condition on the boundary pressure.
 
         The intended use is when the internal boundary is coupled to another
@@ -300,7 +345,7 @@ class FVElliptic(pp.EllipticDiscretization):
                 mixed-dimensional grid.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -308,34 +353,118 @@ class FVElliptic(pp.EllipticDiscretization):
                 the two adjacent nodes.
             self_ind (int): Index in cc and matrix associated with this node.
                 Should be either 1 or 2.
-            use_slave_proj (boolean): If True, the slave side projection operator is
+            use_secondary_proj (boolean): If True, the secondary side projection operator is
                 used. Needed for periodic boundary conditions.
 
         """
         mg = data_edge["mortar_grid"]
 
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
+        parameter_dictionary = data[pp.PARAMETERS][self.keyword]
 
-        if use_slave_proj:
-            proj = mg.slave_to_mortar_avg()
-            proj_int = mg.mortar_to_slave_int()
+        if use_secondary_proj:
+            proj = mg.secondary_to_mortar_avg()
+            proj_int = mg.mortar_to_secondary_int()
         else:
-            proj = mg.master_to_mortar_avg()
-            proj_int = mg.mortar_to_master_int()
+            proj = mg.primary_to_mortar_avg()
+            if assemble_matrix:
+                proj_int = mg.mortar_to_primary_int()
 
-        cc[2, self_ind] += proj * matrix_dictionary["bound_pressure_cell"]
-        cc[2, 2] += proj * matrix_dictionary["bound_pressure_face"] * proj_int
+        if assemble_matrix:
+            cc[2, self_ind] += (
+                proj * matrix_dictionary[self.bound_pressure_cell_matrix_key]
+            )
+            cc[2, 2] += (
+                proj * matrix_dictionary[self.bound_pressure_face_matrix_key] * proj_int
+            )
         # Add contribution from boundary conditions to the pressure at the fracture
         # faces. For TPFA this will be zero, but for MPFA we will get a contribution
         # on the fractures extending to the boundary due to the interaction region
         # around a node.
-        bc_val = data[pp.PARAMETERS][self.keyword]["bc_values"]
-        rhs[2] -= proj * matrix_dictionary["bound_pressure_face"] * bc_val
+        if assemble_rhs:
+            bc_val = parameter_dictionary["bc_values"]
+            rhs[2] -= (
+                proj * matrix_dictionary[self.bound_pressure_face_matrix_key] * bc_val
+            )
+
+            # Add gravity contribution if relevant
+            if "vector_source" in parameter_dictionary:
+                vector_source_discr = matrix_dictionary[
+                    self.bound_pressure_vector_source_matrix_key
+                ]
+                # The vector source, defaults to zero if not specified.
+                vector_source = parameter_dictionary.get("vector_source")
+                rhs[2] -= proj * vector_source_discr * vector_source
+
+    @pp.time_logger(sections=module_sections)
+    def assemble_int_bound_pressure_trace_rhs(
+        self, g, data, data_edge, cc, rhs, self_ind, use_secondary_proj=False
+    ):
+        """Assemble the rhs contribution from an internal
+        boundary, manifested as a condition on the boundary pressure.
+
+        For details, see self.assemble_int_bound_pressure_trace()
+
+        Parameters:
+            g (Grid): Grid which the condition should be imposed on.
+            data (dictionary): Data dictionary for the node in the
+                mixed-dimensional grid.
+            data_edge (dictionary): Data dictionary for the edge in the
+                mixed-dimensional grid.
+            cc (block matrix, 3x3): Block matrix for the coupling condition.
+                The first and second rows and columns are identified with the
+                primary and secondary side; the third belongs to the edge variable.
+                The discretization of the relevant term is done in-place in cc.
+            matrix (block matrix 3x3): Discretization matrix for the edge and
+                the two adjacent nodes.
+            rhs (block_array 3x1): Right hand side contribution for the edge and
+                the two adjacent nodes.
+            self_ind (int): Index in cc and matrix associated with this node.
+                Should be either 1 or 2.
+            use_secondary_proj (boolean): If True, the secondary side projection operator is
+                used. Needed for periodic boundary conditions.
+
+        """
+        mg = data_edge["mortar_grid"]
+
+        matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
+        parameter_dictionary = data[pp.PARAMETERS][self.keyword]
+
+        if use_secondary_proj:
+            proj = mg.secondary_to_mortar_avg()
+        else:
+            proj = mg.primary_to_mortar_avg()
+
+        # Add contribution from boundary conditions to the pressure at the fracture
+        # faces. For TPFA this will be zero, but for MPFA we will get a contribution
+        # on the fractures extending to the boundary due to the interaction region
+        # around a node.
+        bc_val = parameter_dictionary["bc_values"]
+        rhs[2] -= proj * matrix_dictionary[self.bound_pressure_face_matrix_key] * bc_val
+
+        # Add gravity contribution if relevant
+        if "vector_source" in parameter_dictionary:
+            vector_source_discr = matrix_dictionary[
+                self.bound_pressure_vector_source_matrix_key
+            ]
+
+            # The vector source, defaults to zero if not specified.
+            vector_source = parameter_dictionary.get("vector_source")
+            rhs[2] -= proj * vector_source_discr * vector_source
 
     def assemble_int_bound_grad_p_between_interfaces(
-        self, g, data_grid, data_edge, proj_primary, proj_secondary, cc, matrix, rhs, use_slave_proj=False
+        self,
+        g,
+        data_grid,
+        data_edge,
+        proj_primary,
+        proj_secondary,
+        cc,
+        matrix,
+        rhs,
+        use_slave_proj=False,
     ):
-        """ Assemble the contribution from an internal
+        """Assemble the contribution from an internal
         boundary, manifested as a condition on the boundary pressure.
 
         Parameters:
@@ -365,36 +494,27 @@ class FVElliptic(pp.EllipticDiscretization):
         else:
             proj = mg.slave_to_mortar_avg(3)
 
-        rt0_flux_vector = pp.RT0("RT0").project_flux_matrix(g, data_grid)
-        """
-        R = data_edge["tangential_normal_projection"].project_tangential_normal(g.num_cells)
-        if g.dim == 1:
-            rows = np.array([0,1,2,0,1,2,0,1,2])
-            cols = np.array([0,0,0,1,1,1,2,2,2])
-            vals = np.array([R[0,0], R[1,0], 0, R[0,1], R[1,1], 0, 0, 0, 1])
-            block = sps.coo_matrix((vals, (rows,cols)), shape=(3,3)).toarray()
-            R = sps.kron(sps.identity(g.num_cells), block)
+        rt0_flux_vector = pp.RT0.project_flux_matrix(g, data_grid)
 
-        in_plane_rt0_flux_vector = R * rt0_flux_vector
-        """
-        
         parameter_dictionary = data_grid[pp.PARAMETERS][self.keyword]
         parameter_dictionary_edge = data_edge[pp.PARAMETERS][self.keyword]
 
         # Extract parameters
         k = parameter_dictionary["second_order_tensor"]
         # should it be multiplied by factor two?
-        transverse_diffusivity = np.absolute(parameter_dictionary_edge["transverse_diffusivity"]) 
+        transverse_diffusivity = np.absolute(
+            parameter_dictionary_edge["transverse_diffusivity"]
+        )
 
-        inv_k = np.linalg.inv(k.values[0 : 3, 0 : 3, 0])
+        inv_k = np.linalg.inv(k.values[0:3, 0:3, 0])
         k_trans = transverse_diffusivity[:, 0]
-        
-        for c in range (1, mg.num_cells):
+
+        for c in range(1, mg.num_cells):
             B = transverse_diffusivity[:, c]
             k_trans = sps.block_diag((k_trans, B))
 
-        for c in range (1, g.num_cells):
-            A = np.linalg.inv(k.values[0 : 3, 0 : 3, c])
+        for c in range(1, g.num_cells):
+            A = np.linalg.inv(k.values[0:3, 0:3, c])
             inv_k = sps.block_diag((inv_k, A))
 
         inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
@@ -407,8 +527,8 @@ class FVElliptic(pp.EllipticDiscretization):
         # compute grad_p = inv_k * q
         # shape (3 x g.num_cells, g.num_faces)
         # order is q_1x, q_1y, q_1z, q_2x, q_2y, q_2z, ..
-        grad_p = inv_k * rt0_flux_vector#in_plane_rt0_flux_vector
-        #grad_p = inv_k * in_plane_rt0_flux_vector
+        grad_p = inv_k * rt0_flux_vector  # in_plane_rt0_flux_vector
+        # grad_p = inv_k * in_plane_rt0_flux_vector
 
         # compute T = inv_k_ortho * k_trans
         # shape (mg.num_cells, 3 x mg.num_cells)
@@ -416,25 +536,24 @@ class FVElliptic(pp.EllipticDiscretization):
         # [[kt_1x, kt_1y, kt_1z,   0      0      0  , ...
         #  [  0      0      0    kt_2x, kt_2y, kt_2z, ...
         if mg.num_cells == 1:
-            T = inv_k_ortho * k_trans.reshape((1,3))
+            T = inv_k_ortho * k_trans.reshape((1, 3))
             term = np.dot(T, proj * grad_p)
         else:
-            T = inv_k_ortho * k_trans     
+            T = inv_k_ortho * k_trans
             term = T * proj * grad_p
 
         if g.dim == 1:
             term = sps.csr_matrix(term)
 
-        cc[1, 2] += (
-            term * proj_secondary
-        )
+        cc[1, 2] += term * proj_secondary
 
         return cc, rhs
 
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_pressure_trace_between_interfaces(
         self, g, data_grid, proj_primary, proj_secondary, cc, matrix, rhs
     ):
-        """ Assemble the contribution from an internal
+        """Assemble the contribution from an internal
         boundary, manifested as a condition on the boundary pressure.
 
         Parameters:
@@ -447,12 +566,12 @@ class FVElliptic(pp.EllipticDiscretization):
                 grid to the main grid.
             cc (block matrix, 3x3): Block matrix of size 3 x 3, whwere each block represents
                 coupling between variables on this interface. Index 0, 1 and 2
-                represent the master grid, the primary and secondary interface,
+                represent the primary grid, the primary and secondary interface,
                 respectively.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
             rhs (block_array 3x1): Block matrix of size 3 x 1, representing the right hand
-                side of this coupling. Index 0, 1 and 2 represent the master grid,
+                side of this coupling. Index 0, 1 and 2 represent the primary grid,
                 the primary and secondary interface, respectively.
 
         """
@@ -460,14 +579,16 @@ class FVElliptic(pp.EllipticDiscretization):
         matrix_dictionary = data_grid[pp.DISCRETIZATION_MATRICES][self.keyword]
 
         cc[1, 2] += (
-            proj_primary * matrix_dictionary["bound_pressure_face"] * proj_secondary
+            proj_primary
+            * matrix_dictionary[self.bound_pressure_face_matrix_key]
+            * proj_secondary
         )
-        return cc, rhs
-    
+
+    @pp.time_logger(sections=module_sections)
     def assemble_int_bound_pressure_cell(
         self, g, data, data_edge, cc, matrix, rhs, self_ind
     ):
-        """ Abstract method. Assemble the contribution from an internal
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a condition on the cell pressure.
 
         The intended use is when the internal boundary is coupled to another
@@ -486,7 +607,7 @@ class FVElliptic(pp.EllipticDiscretization):
                 mixed-dimensional grid.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -497,14 +618,14 @@ class FVElliptic(pp.EllipticDiscretization):
         """
         mg = data_edge["mortar_grid"]
 
-        proj = mg.slave_to_mortar_avg()
+        proj = mg.secondary_to_mortar_avg()
 
         cc[2, self_ind] -= proj
-        
+
     def assemble_int_bound_grad_p(
-        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_slave_proj=False
+        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_secondary_proj=False
     ):
-        """ Abstract method. Assemble the contribution from an internal
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a condition on the cell pressure.
 
         The intended use is when the internal boundary is coupled to another
@@ -537,37 +658,22 @@ class FVElliptic(pp.EllipticDiscretization):
 
         if g.dim == 0:
             return
-       
-        mg = data_edge["mortar_grid"]
-            
-        if use_slave_proj:
-            proj = mg.master_to_mortar_avg(3)
-            proj_vector_source = mg.mortar_to_master_int(g.dim)
+
+        mg: pp.MortarGrid = data_edge["mortar_grid"]
+
+        if use_secondary_proj:
+            proj = mg.primary_to_mortar_avg(3)
         else:
             proj = mg.slave_to_mortar_avg(3)
-            proj_vector_source = mg.mortar_to_slave_int(g.dim)
 
-        rt0_flux_vector = pp.RT0("RT0").project_flux_matrix(g, data)
+        rt0_flux_vector = pp.RT0.project_flux_matrix(g, data)
 
-        """
-        R = data_edge["tangential_normal_projection"].project_tangential_normal(g.num_cells)
-        if g.dim == 1:
-            rows = np.array([0,1,2,0,1,2,0,1,2])
-            cols = np.array([0,0,0,1,1,1,2,2,2])
-            vals = np.array([R[0,0], R[1,0], 0, R[0,1], R[1,1], 0, 0, 0, 1])
-            block = sps.coo_matrix((vals, (rows,cols)), shape=(3,3)).toarray()
-            R = sps.kron(sps.identity(g.num_cells), block)
-
-        in_plane_rt0_flux_vector = R * rt0_flux_vector
-        """
-        
         parameter_dictionary = data[pp.PARAMETERS][self.keyword]
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
         matrix_dictionary_edge = data_edge[pp.DISCRETIZATION_MATRICES][self.keyword]
         # Extract parameters
         k = parameter_dictionary["second_order_tensor"]
-        if not "bound_flux" in matrix_dictionary:
-            self.discretize(g, data)
+
         parameter_dictionary_edge = data_edge[pp.PARAMETERS][self.keyword]
 
         # should it be multiplied by factor two?
@@ -578,15 +684,15 @@ class FVElliptic(pp.EllipticDiscretization):
         flux = matrix_dictionary["flux"]
         bc_val = parameter_dictionary["bc_values"]
 
-        inv_k = np.linalg.inv(k.values[0 : 3, 0 : 3, 0])
+        inv_k = np.linalg.inv(k.values[0:3, 0:3, 0])
         k_trans = transverse_diffusivity[:, 0]
-        
-        for c in range (1, mg.num_cells):
+
+        for c in range(1, mg.num_cells):
             B = transverse_diffusivity[:, c]
             k_trans = sps.block_diag((k_trans, B))
 
-        for c in range (1, g.num_cells):
-            A = np.linalg.inv(k.values[0 : 3, 0 : 3, c])
+        for c in range(1, g.num_cells):
+            A = np.linalg.inv(k.values[0:3, 0:3, c])
             inv_k = sps.block_diag((inv_k, A))
 
         inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
@@ -594,13 +700,13 @@ class FVElliptic(pp.EllipticDiscretization):
         if not isinstance(inv_k_ortho, np.ndarray):
             inv_k_ortho *= np.ones(mg.num_cells)
 
-        inv_k_ortho = sps.diags(inv_k_ortho) 
+        inv_k_ortho = sps.diags(inv_k_ortho)
 
         # compute grad_p = inv_k * q
         # shape (3 x g.num_cells, g.num_faces)
         # order is q_1x, q_1y, q_1z, q_2x, q_2y, q_2z, ..
-        grad_p = inv_k * rt0_flux_vector#in_plane_rt0_flux_vector
-        #grad_p = inv_k * in_plane_rt0_flux_vector
+        grad_p = inv_k * rt0_flux_vector  # in_plane_rt0_flux_vector
+        # grad_p = inv_k * in_plane_rt0_flux_vector
 
         # compute T = inv_k_ortho * k_trans
         # shape (mg.num_cells, 3 x mg.num_cells)
@@ -608,23 +714,23 @@ class FVElliptic(pp.EllipticDiscretization):
         # [[kt_1x, kt_1y, kt_1z,   0      0      0  , ...
         #  [  0      0      0    kt_2x, kt_2y, kt_2z, ...
         if mg.num_cells == 1:
-            T = inv_k_ortho * k_trans.reshape((1,3))
+            T = inv_k_ortho * k_trans.reshape((1, 3))
             term = -np.dot(T, proj * grad_p)
         else:
-            T = inv_k_ortho * k_trans     
+            T = inv_k_ortho * k_trans
             term = -T * proj * grad_p
 
         if g.dim == 1:
             term = sps.csr_matrix(term)
-            
+
         cc[2, self_ind] += term * flux
 
         rhs[2] -= term * bound_flux * bc_val
 
     def assemble_int_bound_vector_source(
-        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_slave_proj=False
+        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_secondary_proj=False
     ):
-        """ Abstract method. Assemble the contribution from an internal
+        """Abstract method. Assemble the contribution from an internal
         boundary, manifested as a source term.
 
         The intended use is when the internal boundary is coupled to another
@@ -657,7 +763,7 @@ class FVElliptic(pp.EllipticDiscretization):
         """
         if g.dim == 0:
             return
-        mg = data_edge["mortar_grid"]
+        mg: pp.MortarGrid = data_edge["mortar_grid"]
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
         parameter_dictionary = data[pp.PARAMETERS][self.keyword]
 
@@ -669,12 +775,12 @@ class FVElliptic(pp.EllipticDiscretization):
         if not isinstance(inv_k_ortho, np.ndarray):
             inv_k_ortho *= np.ones(mg.num_cells)
 
-        inv_k_ortho = sps.diags(inv_k_ortho) 
-       
-        if use_slave_proj:
-            proj = mg.mortar_to_master_int(g.dim)
+        inv_k_ortho = sps.diags(inv_k_ortho)
+
+        if use_secondary_proj:
+            proj = mg.mortar_to_primary_int(g.dim)
         else:
-            proj = mg.mortar_to_slave_int(g.dim)
+            proj = mg.mortar_to_secondary_int(g.dim)
 
         div_vector_source = matrix_dictionary["div_vector_source"]
 
@@ -684,42 +790,40 @@ class FVElliptic(pp.EllipticDiscretization):
             fi, ci, _ = sps.find(g.cell_faces)
             fc_cc = g.face_centers[::, fi] - g.cell_centers[::, ci]
             dist_face_cell = np.linalg.norm(fc_cc, 2, axis=0)
-            k = k.values[0,0,ci]
-            values = np.divide(dist_face_cell,k)
+            k = k.values[0, 0, ci]
+            values = np.divide(dist_face_cell, k)
             map_arithmetic_mean = sps.coo_matrix(
-                (
-                    values,
-                    (fi, ci)), shape=(g.num_faces, g.num_cells)
+                (values, (fi, ci)), shape=(g.num_faces, g.num_cells)
             )
             div_vector_source = sps.diags(div_vector_source)
             div_vector_source_inv_k = div_vector_source * map_arithmetic_mean
             k_trans = transverse_diffusivity[0, :]
             kt = sps.diags(k_trans)
         else:
-            inv_k = np.linalg.inv(k.values[0 : 2, 0 : 2, 0])
-            kt = transverse_diffusivity[0 : 2, 0].reshape((2,1))
+            inv_k = np.linalg.inv(k.values[0:2, 0:2, 0])
+            kt = transverse_diffusivity[0:2, 0].reshape((2, 1))
 
-            for c in range (1, g.num_cells):
-                A = np.linalg.inv(k.values[0 : 2, 0 : 2, c])
+            for c in range(1, g.num_cells):
+                A = np.linalg.inv(k.values[0:2, 0:2, c])
                 inv_k = sps.block_diag((inv_k, A))
 
-            for c in range (1, mg.num_cells):
-                B = transverse_diffusivity[0 : 2, c].reshape((2,1))
-                kt = sps.block_diag((kt, B))               
+            for c in range(1, mg.num_cells):
+                B = transverse_diffusivity[0:2, c].reshape((2, 1))
+                kt = sps.block_diag((kt, B))
 
             div_vector_source_inv_k = div_vector_source * inv_k
-            
+
         div = pp.fvutils.scalar_divergence(g)
 
-        inv_M = sps.diags(1.0 / mg.cell_volumes)       
-            
-        cc[self_ind, 2] += div * div_vector_source_inv_k * proj * kt * inv_k_ortho * inv_M
-        #inv_kf = parameter_dictionary_edge["inv_kf"]
-        #proj_int = mg.slave_to_mortar_avg()
-        #cc[2,2] -= factor * inv_kf * factor * proj_int * div * div_vector_source_inv_k * proj# * inv_M
-        
+        inv_M = sps.diags(1.0 / mg.cell_volumes)
+
+        cc[self_ind, 2] += (
+            div * div_vector_source_inv_k * proj * kt * inv_k_ortho * inv_M
+        )
+
+    @pp.time_logger(sections=module_sections)
     def enforce_neumann_int_bound(self, g, data_edge, matrix, self_ind):
-        """ Enforce Neumann boundary conditions on a given system matrix.
+        """Enforce Neumann boundary conditions on a given system matrix.
 
         The method is void for finite volume approaches, but is implemented
         to be compatible with the general framework.
@@ -731,3 +835,136 @@ class FVElliptic(pp.EllipticDiscretization):
         """
         # Operation is void for finite volume methods
         pass
+
+
+class EllipticDiscretizationZeroPermeability(FVElliptic):
+    """Specialized discretization for domains with zero tangential permeability.
+
+    Intended usage is to impose full continuity conditions between domains of higher
+    dimensions separated by a lower-dimensional domain (think two intersecting
+    fractures), in cases where one does not want to eliminate the lower-dimensional
+    domain from the GridBucket. The class is designed to interact with the class
+    FluxPressureContinuity. Wider usage is possible, but be cautious.
+
+    The subclassing from FVElliptic was convenient, but other options could also have
+    worked.
+
+    NOTICE: There seems  no point in assigning this method as the higher-dimensional
+    discretization. Accordingly, the methods for assembly of interface contributions
+    from the primary side of a mortar grid are delibierately designed to fail.
+
+    """
+
+    @pp.time_logger(sections=module_sections)
+    def discretize(self, g, data):
+        """
+        Formal discretization method - nothing to do here.
+
+        Parameters
+        ----------
+        g (pp.Grid): grid, or a subclass.
+        data (dict).
+
+        """
+        pass
+
+    @pp.time_logger(sections=module_sections)
+    def assemble_matrix(self, g, data):
+        """Assemble system matrix. Will be zero matrix of appropriate size.
+
+        Parameters:
+            g (Grid): Computational grid, with geometry fields computed.
+            data (dictionary): With data stored.
+
+        Returns:
+            scipy.sparse.csr_matrix: Zero matrix.
+
+        """
+        return sps.csc_matrix((self.ndof(g), self.ndof(g)))
+
+    @pp.time_logger(sections=module_sections)
+    def assemble_rhs(self, g, data):
+        """Assemble right hand side vector. Will be zero vector of appropriate size.
+
+        Parameters:
+            g (Grid): Computational grid, with geometry fields computed.
+            data (dictionary): With data stored.
+
+        Returns:
+            np.array: Zero vector.
+
+        """
+
+        return np.zeros(self.ndof(g))
+
+    @pp.time_logger(sections=module_sections)
+    def assemble_int_bound_flux(
+        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_secondary_proj=False
+    ):
+        """Assemble the contribution from an internal boundary, manifested as a
+        flux boundary condition.
+
+        This method should not be used for the zero-permeability case; it would
+        require a flux in the higher-dimensional grid. Therefore raise an error if
+        this method is invoked.
+
+        Parameters:
+            g (Grid): Grid which the condition should be imposed on.
+            data (dictionary): Data dictionary for the node in the
+                mixed-dimensional grid.
+            data_edge (dictionary): Data dictionary for the edge in the
+                mixed-dimensional grid.
+            cc (block matrix, 3x3): Block matrix for the coupling condition.
+                The first and second rows and columns are identified with the
+                primary and secondary side; the third belongs to the edge variable.
+                The discretization of the relevant term is done in-place in cc.
+            matrix (block matrix 3x3): Discretization matrix for the edge and
+                the two adjacent nodes.
+            rhs (block_array 3x1): Right hand side contribution for the edge and
+                the two adjacent nodes.
+            self_ind (int): Index in cc and matrix associated with this node.
+                Should be either 1 or 2.
+            use_secondary_proj (boolean): If True, the secondary side projection operator is
+                used. Needed for periodic boundary conditions.
+
+        """
+        raise NotImplementedError(
+            """This class should not be used as a
+                                  higher-dimensional discretization"""
+        )
+
+    @pp.time_logger(sections=module_sections)
+    def assemble_int_bound_pressure_trace(
+        self, g, data, data_edge, cc, matrix, rhs, self_ind, use_secondary_proj=False
+    ):
+        """Assemble the contribution from an internal
+        boundary, manifested as a condition on the boundary pressure.
+
+        This method should not be used for the zero-permeability case; it would
+        require a flux in the higher-dimensional grid. Therefore raise an error if
+        this method is invoked.
+
+        Parameters:
+            g (Grid): Grid which the condition should be imposed on.
+            data (dictionary): Data dictionary for the node in the
+                mixed-dimensional grid.
+            data_edge (dictionary): Data dictionary for the edge in the
+                mixed-dimensional grid.
+            cc (block matrix, 3x3): Block matrix for the coupling condition.
+                The first and second rows and columns are identified with the
+                primary and secondary side; the third belongs to the edge variable.
+                The discretization of the relevant term is done in-place in cc.
+            matrix (block matrix 3x3): Discretization matrix for the edge and
+                the two adjacent nodes.
+            rhs (block_array 3x1): Right hand side contribution for the edge and
+                the two adjacent nodes.
+            self_ind (int): Index in cc and matrix associated with this node.
+                Should be either 1 or 2.
+            use_secondary_proj (boolean): If True, the secondary side projection operator is
+                used. Needed for periodic boundary conditions.
+
+        """
+        raise NotImplementedError(
+            """This class should not be used as a
+                                  higher-dimensional discretization"""
+        )

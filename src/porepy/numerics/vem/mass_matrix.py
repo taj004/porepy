@@ -20,18 +20,22 @@ self._key() + "bound_mixed_mass" or self._key() + "bound_inv_mixed_mass", respec
 """
 import numpy as np
 import scipy.sparse as sps
+
 import porepy as pp
+
+module_sections = ["numerics", "discretization", "assembly"]
 
 
 class MixedMassMatrix:
-    """ Class that provides the discretization of a L2-mass bilinear form with constant
+    """Class that provides the discretization of a L2-mass bilinear form with constant
     test and trial functions for mixed methods (e.g. RT0, MVEM).
     """
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, keyword="flow"):
-        """ Set the discretization, with the keyword used for storing various
+        """Set the discretization, with the keyword used for storing various
         information associated with the discretization.
 
         Paramemeters:
@@ -42,8 +46,9 @@ class MixedMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def _key(self):
-        """ Get the keyword of this object, on a format friendly to access relevant
+        """Get the keyword of this object, on a format friendly to access relevant
         fields in the data dictionary
 
         Returns:
@@ -54,8 +59,9 @@ class MixedMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def ndof(self, g):
-        """ Return the number of degrees of freedom associated to the method.
+        """Return the number of degrees of freedom associated to the method.
         In this case number of faces plus number of cells.
 
         Parameter:
@@ -69,8 +75,9 @@ class MixedMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix_rhs(self, g, data):
-        """ Return the matrix and right-hand side (null) for a discretization of a
+        """Return the matrix and right-hand side (null) for a discretization of a
         L2-mass bilinear form with constant test and trial functions. Also
         discretize the necessary operators if the data dictionary does not contain
         a mass matrix.
@@ -91,8 +98,9 @@ class MixedMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix(self, g, data):
-        """ Return the matrix for a discretization of a L2-mass bilinear form with
+        """Return the matrix for a discretization of a L2-mass bilinear form with
         constant test and trial functions. Also discretize the necessary operators
         if the data dictionary does not contain a mass matrix.
 
@@ -109,8 +117,9 @@ class MixedMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def assemble_rhs(self, g, data):
-        """ Return the (null) right-hand side for a discretization of a L2-mass bilinear
+        """Return the (null) right-hand side for a discretization of a L2-mass bilinear
         form with constant test and trial functions. Also discretize the necessary
         operators if the data dictionary does not contain a discretization of the
         boundary equation.
@@ -132,8 +141,9 @@ class MixedMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def discretize(self, g, data):
-        """ Discretize a L2-mass bilinear form with constant test and trial functions.
+        """Discretize a L2-mass bilinear form with constant test and trial functions.
 
         We assume the following two sub-dictionaries to be present in the data
         dictionary:
@@ -172,10 +182,11 @@ class MixedMassMatrix:
 
 
 class MixedInvMassMatrix:
-    """ Class that provides the discretization of an inverse L2-mass bilinear form with constant
+    """Class that provides the discretization of an inverse L2-mass bilinear form with constant
     test and trial functions for mixed methods (e.g. RT0, MVEM).
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, keyword="flow"):
         """
         Set the discretization, with the keyword used for storing various
@@ -189,8 +200,9 @@ class MixedInvMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def _key(self):
-        """ Get the keyword of this object, on a format friendly to access relevant
+        """Get the keyword of this object, on a format friendly to access relevant
         fields in the data dictionary
 
         Returns:
@@ -201,8 +213,9 @@ class MixedInvMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def ndof(self, g):
-        """ Return the number of degrees of freedom associated to the method.
+        """Return the number of degrees of freedom associated to the method.
         In this case number of faces plus number of cells.
 
         Parameter
@@ -218,8 +231,9 @@ class MixedInvMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix_rhs(self, g, data):
-        """ Return the inverse of the matrix and right-hand side (null) for a
+        """Return the inverse of the matrix and right-hand side (null) for a
         discretization of a L2-mass bilinear form with constant test and trial
         functions. Also discretize the necessary operators if the data dictionary does
         not contain a discrete inverse mass matrix.
@@ -241,8 +255,9 @@ class MixedInvMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix(self, g, data):
-        """ Return the inverse of the matrix for a discretization of a L2-mass bilinear
+        """Return the inverse of the matrix for a discretization of a L2-mass bilinear
         form with constant test and trial functions. Also discretize the necessary
         operators if the data dictionary does not contain a discrete inverse mass
         matrix.
@@ -261,8 +276,9 @@ class MixedInvMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def assemble_rhs(self, g, data):
-        """ Return the (null) right-hand side for a discretization of the inverse of a
+        """Return the (null) right-hand side for a discretization of the inverse of a
         L2-mass bilinear form with constant test and trial functions. Also discretize
         the necessary operators if the data dictionary does not contain a discretization
         of the boundary term.
@@ -281,8 +297,9 @@ class MixedInvMassMatrix:
 
     # ------------------------------------------------------------------------------#
 
+    @pp.time_logger(sections=module_sections)
     def discretize(self, g, data, faces=None):
-        """ Discretize the inverse of a L2-mass bilinear form with constant test and
+        """Discretize the inverse of a L2-mass bilinear form with constant test and
         trial functions.
 
         We assume the following two sub-dictionaries to be present in the data

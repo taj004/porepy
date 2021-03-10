@@ -1,10 +1,12 @@
 from __future__ import division
-import numpy as np
-import unittest
 
-import porepy as pp
+import unittest
 from test.integration import _helper_test_upwind_coupling
 from test.test_utils import permute_matrix_vector
+
+import numpy as np
+
+import porepy as pp
 
 # ------------------------------------------------------------------------------#
 
@@ -14,10 +16,7 @@ class BasicsTest(unittest.TestCase):
     # ------------------------------------------------------------------------------#
 
     def test_upwind_coupling_2d_1d_bottom_top(self):
-        f = np.array([[0, 1], [1, 1]])
-        gb = pp.meshing.cart_grid([f], [1, 2])
-        gb.compute_geometry()
-        gb.assign_node_ordering()
+        gb, _ = pp.grid_buckets_2d.single_horizontal([1, 2], simplex=False)
 
         # define discretization
         key = "transport"
@@ -37,7 +36,7 @@ class BasicsTest(unittest.TestCase):
             if bound_faces.size != 0:
                 bound_face_centers = g.face_centers[:, bound_faces]
 
-                top = bound_face_centers[1, :] > 2 - tol
+                top = bound_face_centers[1, :] > 1 - tol
                 bottom = bound_face_centers[1, :] < tol
 
                 labels = np.array(["neu"] * bound_faces.size)
@@ -51,9 +50,14 @@ class BasicsTest(unittest.TestCase):
                 specified_parameters.update({"bc": bound, "bc_values": bc_val})
 
             pp.initialize_default_data(g, d, "transport", specified_parameters)
+
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
         add_constant_darcy_flux(gb, upwind, [0, 1, 0], a)
 
-        assembler = pp.Assembler(gb)
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
         assembler.discretize()
         U_tmp, rhs = assembler.assemble_matrix_rhs()
 
@@ -67,7 +71,7 @@ class BasicsTest(unittest.TestCase):
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
 
         U, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
 
         theta = np.linalg.solve(U.A, rhs)
@@ -97,10 +101,7 @@ class BasicsTest(unittest.TestCase):
     # ------------------------------------------------------------------------------#
 
     def test_upwind_coupling_2d_1d_left_right(self):
-        f = np.array([[0, 1], [1, 1]])
-        gb = pp.meshing.cart_grid([f], [1, 2])
-        gb.compute_geometry()
-        gb.assign_node_ordering()
+        gb, _ = pp.grid_buckets_2d.single_horizontal([1, 2], simplex=False)
 
         tol = 1e-3
         # define discretization
@@ -117,7 +118,6 @@ class BasicsTest(unittest.TestCase):
         for g, d in gb:
 
             aperture = np.ones(g.num_cells) * np.power(a, gb.dim_max() - g.dim)
-            #            specified_parameters = {"darcy_flux": upwind.darcy_flux(g, [0, 1, 0], aperture), "aperture": aperture}
             specified_parameters = {"aperture": aperture}
             bound_faces = g.tags["domain_boundary_faces"].nonzero()[0]
             if bound_faces.size != 0:
@@ -138,9 +138,14 @@ class BasicsTest(unittest.TestCase):
 
             pp.initialize_default_data(g, d, "transport", specified_parameters)
 
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
+
         add_constant_darcy_flux(gb, upwind, [1, 0, 0], a)
 
-        assembler = pp.Assembler(gb)
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
         assembler.discretize()
 
         U_tmp, rhs = assembler.assemble_matrix_rhs()
@@ -155,24 +160,23 @@ class BasicsTest(unittest.TestCase):
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
 
         U, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
         theta = np.linalg.solve(U.A, rhs)
         #        deltaT = solver.cfl(gb)
 
         U_known = np.array(
             [
-                [1.0, 0.0, 0.0, 0.0, 1.0],
-                [0.0, 1.0, 0.0, 1.0, 0.0],
+                [0.5, 0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.5, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.01, -1.0, -1.0],
                 [0.0, 0.0, 0.0, -1.0, 0.0],
                 [0.0, 0.0, 0.0, 0.0, -1.0],
             ]
         )
 
-        rhs_known = np.array([1, 1, 1e-2, 0, 0])
+        rhs_known = np.array([0.5, 0.5, 1e-2, 0, 0])
         theta_known = np.array([1, 1, 1, 0, 0])
-        deltaT_known = 5 * 1e-1
 
         rtol = 1e-15
         atol = rtol
@@ -185,26 +189,21 @@ class BasicsTest(unittest.TestCase):
     # ------------------------------------------------------------------------------#
 
     def test_upwind_coupling_2d_1d_left_right_cross(self):
-        f1 = np.array([[0, 2], [1, 1]])
-        f2 = np.array([[1, 1], [0, 2]])
-
-        gb = pp.meshing.cart_grid([f1, f2], [2, 2])
-        gb.compute_geometry()
-        gb.assign_node_ordering()
+        gb, _ = pp.grid_buckets_2d.two_intersecting([2, 2], simplex=False)
 
         # Enforce node orderning because of Python 3.5 and 2.7.
         # Don't do it in general.
         cell_centers_1 = np.array(
             [
-                [1.50000000e00, 5.00000000e-01],
-                [1.00000000e00, 1.00000000e00],
+                [7.50000000e-01, 2.5000000e-01],
+                [0.50000000e00, 0.50000000e00],
                 [-5.55111512e-17, 5.55111512e-17],
             ]
         )
         cell_centers_2 = np.array(
             [
-                [1.00000000e00, 1.00000000e00],
-                [1.50000000e00, 5.00000000e-01],
+                [0.50000000e00, 0.50000000e00],
+                [7.50000000e-01, 2.5000000e-01],
                 [-5.55111512e-17, 5.55111512e-17],
             ]
         )
@@ -259,7 +258,7 @@ class BasicsTest(unittest.TestCase):
                 bound_face_centers = g.face_centers[:, bound_faces]
 
                 left = bound_face_centers[0, :] < tol
-                right = bound_face_centers[0, :] > 2 - tol
+                right = bound_face_centers[0, :] > 1 - tol
 
                 labels = np.array(["neu"] * bound_faces.size)
                 labels[np.logical_or(left, right)] = ["dir"]
@@ -275,9 +274,13 @@ class BasicsTest(unittest.TestCase):
                 specified_parameters.update({"bc": bound})
             pp.initialize_default_data(g, d, "transport", specified_parameters)
 
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
         add_constant_darcy_flux(gb, upwind, [1, 0, 0], a)
 
-        assembler = pp.Assembler(gb)
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
         assembler.discretize()
 
         U_tmp, rhs = assembler.assemble_matrix_rhs()
@@ -291,7 +294,7 @@ class BasicsTest(unittest.TestCase):
             grids[d["edge_number"] + gb.num_graph_nodes()] = e
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
         U, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
         theta = np.linalg.solve(U.A, rhs)
         #        deltaT = solver.cfl(gb)
@@ -322,7 +325,7 @@ class BasicsTest(unittest.TestCase):
                 ],
                 [
                     0.0,
-                    1.0,
+                    0.5,
                     0.0,
                     0.0,
                     0.0,
@@ -370,7 +373,7 @@ class BasicsTest(unittest.TestCase):
                     0.0,
                     0.0,
                     0.0,
-                    1.0,
+                    0.5,
                     0.0,
                     0.0,
                     0.0,
@@ -603,7 +606,7 @@ class BasicsTest(unittest.TestCase):
                     0.0,
                     0.0,
                     0.0,
-                    -1.0,
+                    -0.5,
                     0.0,
                     0.0,
                     0.0,
@@ -627,7 +630,7 @@ class BasicsTest(unittest.TestCase):
                     0.0,
                     0.0,
                     0.0,
-                    -1.0,
+                    -0.5,
                     0.0,
                     0.0,
                     0.0,
@@ -645,7 +648,7 @@ class BasicsTest(unittest.TestCase):
                 [
                     0.0,
                     0.0,
-                    1.0,
+                    0.5,
                     0.0,
                     0.0,
                     0.0,
@@ -666,7 +669,7 @@ class BasicsTest(unittest.TestCase):
                     0.0,
                 ],
                 [
-                    1.0,
+                    0.5,
                     0.0,
                     0.0,
                     0.0,
@@ -784,14 +787,36 @@ class BasicsTest(unittest.TestCase):
         )
 
         theta_known = np.array(
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, -1, -1, 1, 1, 0.01, -0.01, 0, 0]
+            [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                -0.5,
+                -0.5,
+                0.5,
+                0.5,
+                0.01,
+                -0.01,
+                0,
+                0,
+            ]
         )
 
         rhs_known = np.array(
             [
-                1.0,
+                0.5,
                 0.0,
-                1.0,
+                0.5,
                 0.0,
                 0.0,
                 0.01,
@@ -812,8 +837,6 @@ class BasicsTest(unittest.TestCase):
                 0,
             ]
         )
-
-        deltaT_known = 5 * 1e-3
 
         rtol = 1e-15
         atol = rtol
@@ -865,9 +888,13 @@ class BasicsTest(unittest.TestCase):
                 specified_parameters.update({"bc": bound, "bc_values": bc_val})
             pp.initialize_default_data(g, d, "transport", specified_parameters)
 
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
         add_constant_darcy_flux(gb, upwind, [0, 0, 1], a)
 
-        assembler = pp.Assembler(gb)
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
         assembler.discretize()
 
         U_tmp, rhs = assembler.assemble_matrix_rhs()
@@ -882,7 +909,7 @@ class BasicsTest(unittest.TestCase):
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
 
         U, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
         theta = np.linalg.solve(U.A, rhs)
         #        deltaT = solver.cfl(gb)
@@ -949,9 +976,13 @@ class BasicsTest(unittest.TestCase):
 
             pp.initialize_default_data(g, d, "transport", specified_parameters)
 
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
         add_constant_darcy_flux(gb, upwind, [1, 0, 0], a)
 
-        assembler = pp.Assembler(gb)
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
         assembler.discretize()
 
         U_tmp, rhs = assembler.assemble_matrix_rhs()
@@ -966,7 +997,7 @@ class BasicsTest(unittest.TestCase):
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
 
         U, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
 
         theta = np.linalg.solve(U.A, rhs)
@@ -1126,8 +1157,13 @@ class BasicsTest(unittest.TestCase):
 
             pp.initialize_default_data(g, d, "transport", specified_parameters)
 
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
         add_constant_darcy_flux(gb, upwind, [1, 0, 0], a)
-        assembler = pp.Assembler(gb)
+
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
 
         assembler.discretize()
         U_tmp, rhs = assembler.assemble_matrix_rhs()
@@ -1141,12 +1177,15 @@ class BasicsTest(unittest.TestCase):
             grids[d["edge_number"] + gb.num_graph_nodes()] = e
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
         U, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
 
         theta = np.linalg.solve(U.A, rhs)
         #        deltaT = solver.cfl(gb)
-        U_known, rhs_known = (
+        (
+            U_known,
+            rhs_known,
+        ) = (
             _helper_test_upwind_coupling.matrix_rhs_for_test_upwind_coupling_3d_2d_1d_0d()
         )
 
@@ -1269,8 +1308,13 @@ class BasicsTest(unittest.TestCase):
             specified_parameters = {"aperture": aperture, "bc": bc}
             pp.initialize_default_data(g, d, "transport", specified_parameters)
 
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
         add_constant_darcy_flux(gb, upwind, [2, 0, 0], a)
-        assembler = pp.Assembler(gb)
+
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
         assembler.discretize()
 
         U_tmp, rhs = assembler.assemble_matrix_rhs()
@@ -1285,7 +1329,7 @@ class BasicsTest(unittest.TestCase):
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
 
         M, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
 
         # add generic mass matrix to solve system
@@ -1428,9 +1472,13 @@ class BasicsTest(unittest.TestCase):
             specified_parameters.update({"bc": bound, "bc_values": bc_val})
             pp.initialize_default_data(g, d, "transport", specified_parameters)
 
+        for e, d in gb.edges():
+            pp.initialize_data(d["mortar_grid"], d, "transport", {})
+
         add_constant_darcy_flux(gb, upwind, [1, 1, 0], a)
 
-        assembler = pp.Assembler(gb)
+        dof_manager = pp.DofManager(gb)
+        assembler = pp.Assembler(gb, dof_manager)
         assembler.discretize()
 
         U_tmp, rhs = assembler.assemble_matrix_rhs()
@@ -1445,7 +1493,7 @@ class BasicsTest(unittest.TestCase):
             variables[d["edge_number"] + gb.num_graph_nodes()] = "lambda_u"
 
         M, rhs = permute_matrix_vector(
-            U_tmp, rhs, assembler.block_dof, assembler.full_dof, grids, variables
+            U_tmp, rhs, dof_manager.block_dof, dof_manager.full_dof, grids, variables
         )
         theta = np.linalg.solve(M.A, rhs)
         M_known = np.array(
@@ -1613,13 +1661,14 @@ def add_constant_darcy_flux(gb, upwind, flux, a):
         p_h = gb.node_props(g_h, pp.PARAMETERS)
         darcy_flux = p_h["transport"]["darcy_flux"]
         sign = np.zeros(g_h.num_faces)
-        sign[g_h.get_all_boundary_faces()] = g_h.sign_of_faces(
-            g_h.get_all_boundary_faces()
-        )
+        boundary_faces = g_h.get_all_boundary_faces()
+        boundary_signs, _ = g_h.signs_and_cells_of_boundary_faces(boundary_faces)
+        sign[boundary_faces] = boundary_signs
+
         mg = d["mortar_grid"]
-        sign = mg.master_to_mortar_avg() * sign
+        sign = mg.primary_to_mortar_avg() * sign
         #        d["param"] = pp.Parameters(g_h)
-        darcy_flux_e = sign * (d["mortar_grid"].master_to_mortar_avg() * darcy_flux)
+        darcy_flux_e = sign * (d["mortar_grid"].primary_to_mortar_avg() * darcy_flux)
         if pp.PARAMETERS not in d:
             d[pp.PARAMETERS] = pp.Parameters(
                 mg, ["transport"], [{"darcy_flux": darcy_flux_e}]

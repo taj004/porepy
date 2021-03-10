@@ -2,6 +2,7 @@
 """
 
 import unittest
+
 import numpy as np
 
 import porepy as pp
@@ -11,7 +12,7 @@ class TestCartGrids(unittest.TestCase):
     def test_2d_coarse_dims_specified(self):
         g = pp.CartGrid([4, 10])
         coarse_dims = np.array([2, 3])
-        p = pp.partition.partition_structured(g, coarse_dims)
+        p = pp.partition.partition_structured(g, coarse_dims=coarse_dims)
 
         p_known = np.array(
             [
@@ -34,7 +35,7 @@ class TestCartGrids(unittest.TestCase):
         g = pp.CartGrid([4, 4, 4])
         coarse_dims = np.array([2, 2, 2])
 
-        p = pp.partition.partition_structured(g, coarse_dims)
+        p = pp.partition.partition_structured(g, coarse_dims=coarse_dims)
         p_known = np.array(
             [
                 [0, 0, 1, 1],
@@ -61,7 +62,7 @@ class TestCartGrids(unittest.TestCase):
         g = pp.CartGrid(np.array([6, 5, 4]))
         coarse_dims = np.array([3, 2, 2])
 
-        p = pp.partition.partition_structured(g, coarse_dims)
+        p = pp.partition.partition_structured(g, coarse_dims=coarse_dims)
         # This just happens to be correct
         p_known = np.array(
             [
@@ -340,7 +341,7 @@ class TestExtractSubGrid(unittest.TestCase):
               |    |    |
               |    |    |
               -----------
-        Extract: 
+        Extract:
                    -----|
                         |
                         -
@@ -451,7 +452,7 @@ class TestOverlap(unittest.TestCase):
 class TestConnectivityChecker(unittest.TestCase):
     def setup(self):
         g = pp.CartGrid([4, 4])
-        p = pp.partition.partition_structured(g, np.array([2, 2]))
+        p = pp.partition.partition_structured(g, coarse_dims=np.array([2, 2]))
         return g, p
 
     def test_connected(self):

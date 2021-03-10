@@ -2,15 +2,16 @@
 Geometric projections related to the tangential and normal spaces of a set of
 vectors.
 """
-
 import numpy as np
 import scipy.sparse as sps
 
 import porepy as pp
 
+module_sections = ["matrix", "numerics", "discretization"]
+
 
 class TangentialNormalProjection:
-    """ Represent a set of projections into tangent and normal vectors.
+    """Represent a set of projections into tangent and normal vectors.
 
     The spaces are defined by the normal vector (see __init__ documentation).
     The basis for the tangential space is arbitrary (arbitrary direction in 2d,
@@ -29,6 +30,7 @@ class TangentialNormalProjection:
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, normals, dim=None):
         if dim is None:
             dim = normals.shape[0]
@@ -50,8 +52,9 @@ class TangentialNormalProjection:
         self.normals = normal
 
     ## Methods for genertation of projection matrices
+    @pp.time_logger(sections=module_sections)
     def project_tangential_normal(self, num=None):
-        """ Define a projection matrix to decompose a matrix into tangential
+        """Define a projection matrix to decompose a matrix into tangential
         and normal components.
 
         The intended usage is to decompose a grid-based vector variable into the
@@ -82,18 +85,19 @@ class TangentialNormalProjection:
         """
         if num is None:
             num = self.projection.shape[-1]
-            data = np.array([self.projection[:, :, i] for i in range(num)]).ravel(
-                order="F"
-            )
+            data = np.array(
+                [self.projection[:, :, i].ravel("f") for i in range(num)]
+            ).ravel()
         else:
             data = np.tile(self.projection[:, :, 0].ravel(order="F"), num)
 
-        mat = pp.utils.sparse_mat.csr_matrix_from_blocks(data, self.dim, num)
+        mat = pp.utils.sparse_mat.csc_matrix_from_blocks(data, self.dim, num)
 
         return mat
 
+    @pp.time_logger(sections=module_sections)
     def project_tangential(self, num=None):
-        """ Define a projection matrix of a specific size onto the tangent space.
+        """Define a projection matrix of a specific size onto the tangent space.
 
         The intended usage is to project a grid-based vector variable onto the
         tangent space of the grid, with the tacit understanding that there is
@@ -120,14 +124,13 @@ class TangentialNormalProjection:
                 size: ((self.dim - 1) * num_vecs) x (self.dim * num_vecs)
 
         """
+        # Construct the full projection matrix - tangential and normal
+        full_projection = self.project_tangential_normal(num)
+
         # Find type and size of projection.
         if num is None:
             num = self.num_vecs
-
         size_proj = self.dim * num
-
-        # Construct the full projection matrix - tangential and normal
-        full_projection = self.project_tangential_normal(num)
 
         # Generate restriction matrix to the tangential space only
         rows = np.arange(num * (self.dim - 1))
@@ -142,8 +145,9 @@ class TangentialNormalProjection:
         # Return the restricted matrix.
         return remove_normal_components * full_projection
 
+    @pp.time_logger(sections=module_sections)
     def project_normal(self, num=None):
-        """ Define a projection matrix of a specific size onto the normal space.
+        """Define a projection matrix of a specific size onto the normal space.
 
         The intended usage is to project a grid-based vector variable onto the
         normal space of the grid, with the tacit understanding that there is
@@ -170,14 +174,14 @@ class TangentialNormalProjection:
                 size: num_vecs x (self.dim * num_vecs) els.
 
         """
+        # Generate full projection matrix
+        full_projection = self.project_tangential_normal(num)
+
         # Find mode and size of projection
         if num is None:
             num = self.num_vecs
 
         size_proj = self.dim * num
-
-        # Generate full projection matrix
-        full_projection = self.project_tangential_normal(num)
 
         # Construct restriction matrix to normal space.
         rows = np.arange(num)
@@ -190,8 +194,9 @@ class TangentialNormalProjection:
         # Return the restricted matrix
         return remove_tangential_components * full_projection
 
+    @pp.time_logger(sections=module_sections)
     def local_projection(self, ind=None):
-        """ Get the local projection matrix (refe)
+        """Get the local projection matrix (refe)
 
         Paremeters:
             ind (int, optional): Index (referring to the order of the normal vectors
@@ -209,6 +214,7 @@ class TangentialNormalProjection:
 
     ### Helper functions below
 
+    @pp.time_logger(sections=module_sections)
     def _decompose_vector(self, nc):
         if self.dim == 3:
             t1 = np.random.rand(self.dim, 1) * np.ones(self.num_vecs)
@@ -221,6 +227,7 @@ class TangentialNormalProjection:
             basis = np.hstack([tc1, normal])
         return basis, normal
 
+    @pp.time_logger(sections=module_sections)
     def _gram_schmidt(self, u1, u2, u3=None):
         """
         Perform a Gram Schmidt procedure for the vectors u1, u2 and u3 to obtain a set of
@@ -248,6 +255,7 @@ class TangentialNormalProjection:
 
         return u1, u2, u3
 
+    @pp.time_logger(sections=module_sections)
     def _invert_3d_matrix(self, M):
         """
         Find the inverse of the (m,m,k) 3D ndArray M. The inverse is intrepreted as the

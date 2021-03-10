@@ -1,11 +1,12 @@
 """
 Various integration tests for contact mechanics.
 """
-import numpy as np
+import test.common.contact_mechanics_examples
 import unittest
 
+import numpy as np
+
 import porepy as pp
-import test.common.contact_mechanics_examples
 
 
 class TestContactMechanics(unittest.TestCase):
@@ -27,9 +28,11 @@ class TestContactMechanics(unittest.TestCase):
         contact_force = d_1[pp.STATE][setup.contact_traction_variable]
 
         displacement_jump_global_coord = (
-            mg.mortar_to_slave_avg(nd=nd) * mg.sign_of_mortar_sides(nd=nd) * u_mortar
+            mg.mortar_to_secondary_avg(nd=nd)
+            * mg.sign_of_mortar_sides(nd=nd)
+            * u_mortar
         )
-        projection = d_m["tangential_normal_projection"]
+        projection = d_1["tangential_normal_projection"]
 
         project_to_local = projection.project_tangential_normal(int(mg.num_cells / 2))
         u_mortar_local = project_to_local * displacement_jump_global_coord
@@ -39,34 +42,35 @@ class TestContactMechanics(unittest.TestCase):
 
         return u_mortar_local_decomposed, contact_force
 
-    def test_pull_top_positive_opening(self):
-
-        setup = SetupContactMechanics(ux_south=0, uy_bottom=0, ux_north=0, uy_top=0.001)
-
-        u_mortar, contact_force = self._solve(setup)
-
-        # All components should be open in the normal direction
-        self.assertTrue(np.all(u_mortar[1] < 0))
-
-        # By symmetry (reasonable to expect from this grid), the jump in tangential
-        # deformation should be zero.
-        self.assertTrue(np.abs(np.sum(u_mortar[0])) < 1e-5)
-
-        # The contact force in normal direction should be zero
-
-        # NB: This assumes the contact force is expressed in local coordinates
-        self.assertTrue(np.all(np.abs(contact_force) < 1e-7))
-
-    def test_pull_bottom_positive_opening(self):
+    def test_pull_north_positive_opening(self):
 
         setup = SetupContactMechanics(
-            ux_south=0, uy_bottom=-0.001, ux_north=0, uy_top=0
+            ux_south=0, uy_south=0, ux_north=0, uy_north=0.001
         )
 
         u_mortar, contact_force = self._solve(setup)
 
         # All components should be open in the normal direction
-        self.assertTrue(np.all(u_mortar[1] < 0))
+        self.assertTrue(np.all(u_mortar[1] > 0))
+
+        # By symmetry (reasonable to expect from this grid), the jump in tangential
+        # deformation should be zero.
+        self.assertTrue(np.abs(np.sum(u_mortar[0])) < 1e-5)
+
+        # The contact force in normal direction should be zero
+        # NB: This assumes the contact force is expressed in local coordinates
+        self.assertTrue(np.all(np.abs(contact_force) < 1e-7))
+
+    def test_pull_south_positive_opening(self):
+
+        setup = SetupContactMechanics(
+            ux_south=0, uy_south=-0.001, ux_north=0, uy_north=0
+        )
+
+        u_mortar, contact_force = self._solve(setup)
+
+        # All components should be open in the normal direction
+        self.assertTrue(np.all(u_mortar[1] > 0))
 
         # By symmetry (reasonable to expect from this grid), the jump in tangential
         # deformation should be zero.
@@ -77,10 +81,10 @@ class TestContactMechanics(unittest.TestCase):
         # NB: This assumes the contact force is expressed in local coordinates
         self.assertTrue(np.all(np.abs(contact_force) < 1e-7))
 
-    def test_push_top_zero_opening(self):
+    def test_push_north_zero_opening(self):
 
         setup = SetupContactMechanics(
-            ux_south=0, uy_bottom=0, ux_north=0, uy_top=-0.001
+            ux_south=0, uy_south=0, ux_north=0, uy_north=-0.001
         )
 
         u_mortar, contact_force = self._solve(setup)
@@ -90,9 +94,11 @@ class TestContactMechanics(unittest.TestCase):
         # Contact force in normal direction should be negative
         self.assertTrue(np.all(contact_force[1] < 0))
 
-    def test_push_bottom_zero_opening(self):
+    def test_push_south_zero_opening(self):
 
-        setup = SetupContactMechanics(ux_south=0, uy_bottom=0.001, ux_north=0, uy_top=0)
+        setup = SetupContactMechanics(
+            ux_south=0, uy_south=0.001, ux_north=0, uy_north=0
+        )
 
         u_mortar, contact_force = self._solve(setup)
 
@@ -106,19 +112,17 @@ class TestContactMechanics(unittest.TestCase):
 class SetupContactMechanics(
     test.common.contact_mechanics_examples.ContactMechanicsExample
 ):
-    def __init__(self, ux_south, uy_bottom, ux_north, uy_top):
+    def __init__(self, ux_south, uy_south, ux_north, uy_north):
         mesh_args = {
             "mesh_size_frac": 0.5,
             "mesh_size_min": 0.023,
             "mesh_size_bound": 0.5,
         }
-        super().__init__(
-            mesh_args, folder_name="dummy"
-        )  # , params={'linear_solver': 'pyamg'})
+        super().__init__(mesh_args, folder_name="dummy", params={"max_iterations": 25})
         self.ux_south = ux_south
-        self.uy_bottom = uy_bottom
+        self.uy_south = uy_south
         self.ux_north = ux_north
-        self.uy_top = uy_top
+        self.uy_north = uy_north
 
     def create_grid(self):
         """
@@ -145,17 +149,17 @@ class SetupContactMechanics(
         self.gb = gb
         self.Nd = gb.dim_max()
 
-    def bc_values(self, g):
-        _, _, _, north, south, _, _ = self.domain_boundary_sides(g)
+    def _bc_values(self, g):
+        _, _, _, north, south, _, _ = self._domain_boundary_sides(g)
         values = np.zeros((g.dim, g.num_faces))
         values[0, south] = self.ux_south
-        values[1, south] = self.uy_bottom
+        values[1, south] = self.uy_south
         values[0, north] = self.ux_north
-        values[1, north] = self.uy_top
+        values[1, north] = self.uy_north
         return values.ravel("F")
 
-    def bc_type(self, g):
-        _, _, _, north, south, _, _ = self.domain_boundary_sides(g)
+    def _bc_type(self, g):
+        _, _, _, north, south, _, _ = self._domain_boundary_sides(g)
         bc = pp.BoundaryConditionVectorial(g, north + south, "dir")
         # Default internal BC is Neumann. We change to Dirichlet for the contact
         # problem. I.e., the mortar variable represents the displacement on the
@@ -164,6 +168,18 @@ class SetupContactMechanics(
         bc.is_neu[:, frac_face] = False
         bc.is_dir[:, frac_face] = True
         return bc
+
+    def _set_parameters(self):
+        super()._set_parameters()
+        dilation_angle = getattr(self, "dilation_angle", 0)
+        for g, d in self.gb:
+            if g.dim < self.Nd:
+
+                initial_gap = getattr(self, "initial_gap", np.zeros(g.num_cells))
+
+                d[pp.PARAMETERS]["mechanics"].update(
+                    {"initial_gap": initial_gap, "dilation_angle": dilation_angle}
+                )
 
 
 if __name__ == "__main__":

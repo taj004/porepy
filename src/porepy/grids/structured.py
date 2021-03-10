@@ -10,7 +10,10 @@ import numpy as np
 import scipy as sp
 import scipy.sparse as sps
 
+import porepy as pp
 from porepy.grids.grid import Grid
+
+module_sections = ["grids", "gridding"]
 
 
 class TensorGrid(Grid):
@@ -22,6 +25,7 @@ class TensorGrid(Grid):
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, x, y=None, z=None, name=None):
         """
         Constructor for 1D or 2D or 3D tensor grid
@@ -53,6 +57,7 @@ class TensorGrid(Grid):
             self.cart_dims = np.array([x.size, y.size, z.size]) - 1
             super(TensorGrid, self).__init__(3, nodes, face_nodes, cell_faces, name)
 
+    @pp.time_logger(sections=module_sections)
     def _create_1d_grid(self, nodes_x):
         """
         Compute grid topology for 1D grids.
@@ -96,6 +101,7 @@ class TensorGrid(Grid):
         )
         return nodes, face_nodes, cell_faces
 
+    @pp.time_logger(sections=module_sections)
     def _create_2d_grid(self, nodes_x, nodes_y):
         """
         Compute grid topology for 2D grids.
@@ -176,6 +182,7 @@ class TensorGrid(Grid):
         )
         return nodes, face_nodes, cell_faces
 
+    @pp.time_logger(sections=module_sections)
     def _create_3d_grid(self, nodes_x, nodes_y, nodes_z):
 
         num_x = nodes_x.size - 1
@@ -291,42 +298,65 @@ class CartGrid(TensorGrid):
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, nx, physdims=None):
         """
         Constructor for Cartesian grid
 
         Parameters
         ----------
-        nx (np.ndarray): Number of cells in each direction. Should be 2D or 3D
+        nx (np.ndarray): Number of cells in each direction. Should be 1d, 2d or 3d.
+            1d grids can also be specified by a scalar.
         physdims (np.ndarray): Physical dimensions in each direction.
+            If it is a dict considers the fields xmin, xmax, ymin, ymax, zmin, zmax
+            to define the grid.
             Defaults to same as nx, that is, cells of unit size.
+
         """
 
-        #        nx = nx.astype(np.int)
-
-        if physdims is None:
-            physdims = nx
+        #        nx = nx.astype(int)
 
         dims = np.asarray(nx).shape
-        assert dims == np.asarray(physdims).shape
+        xmin, ymin, zmin = 0.0, 0.0, 0.0
+
+        if physdims is None:
+            physdims = np.asarray(nx)
+        elif isinstance(physdims, dict):
+            xmin = physdims["xmin"]
+            ymin = physdims.get("ymin", 0.0)
+            zmin = physdims.get("zmin", 0.0)
+
+            physdims = np.asarray(
+                [
+                    physdims["xmax"] - xmin,
+                    physdims.get("ymax", 0) - ymin,
+                    physdims.get("zmax", 0) - zmin,
+                ]
+            )
+
         name = "CartGrid"
 
         # Create point distribution, and then leave construction to
         # TensorGrid constructor
-        if dims is ():  # dirty trick
-            nodes_x = np.linspace(0, physdims, nx + 1)
+        if len(dims) == 0:
+            nodes_x = xmin + np.linspace(0, physdims, nx + 1)
+            super(self.__class__, self).__init__(nodes_x, name=name)
+        elif dims[0] == 1:
+            nodes_x = np.linspace(0, physdims, nx[0] + 1).ravel()
             super(self.__class__, self).__init__(nodes_x, name=name)
         elif dims[0] == 2:
-            nodes_x = np.linspace(0, physdims[0], nx[0] + 1)
-            nodes_y = np.linspace(0, physdims[1], nx[1] + 1)
+            nodes_x = xmin + np.linspace(0, physdims[0], nx[0] + 1)
+            nodes_y = ymin + np.linspace(0, physdims[1], nx[1] + 1)
             super(self.__class__, self).__init__(nodes_x, nodes_y, name=name)
         elif dims[0] == 3:
-            nodes_x = np.linspace(0, physdims[0], nx[0] + 1)
-            nodes_y = np.linspace(0, physdims[1], nx[1] + 1)
-            nodes_z = np.linspace(0, physdims[2], nx[2] + 1)
+            nodes_x = xmin + np.linspace(0, physdims[0], nx[0] + 1)
+            nodes_y = ymin + np.linspace(0, physdims[1], nx[1] + 1)
+            nodes_z = zmin + np.linspace(0, physdims[2], nx[2] + 1)
             super(self.__class__, self).__init__(nodes_x, nodes_y, nodes_z, name=name)
         else:
             raise ValueError(
                 "Cartesian grid only implemented for up to three \
             dimensions"
             )
+
+        self.global_point_ind = np.arange(self.num_nodes)

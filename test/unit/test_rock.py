@@ -1,7 +1,8 @@
 from __future__ import division
 
-import numpy as np
 import unittest
+
+import numpy as np
 
 import porepy as pp
 
@@ -22,8 +23,11 @@ class TestRock(unittest.TestCase):
 
     def test_unit_rock(self):
         R = pp.UnitRock()
-        for _, value in vars(R).items():
-            self.assertTrue(np.allclose(value, 1))
+        for prop, value in vars(R).items():
+            if prop == "POISSON_RATIO":
+                self.assertTrue(np.allclose(value, 0.25))
+            else:
+                self.assertTrue(np.allclose(value, 1))
 
     def test_sand_stone(self):
         R = pp.SandStone()

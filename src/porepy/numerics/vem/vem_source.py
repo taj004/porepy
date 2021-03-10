@@ -11,8 +11,10 @@ import scipy.sparse as sps
 
 import porepy as pp
 
+module_sections = ["numerics", "discretization", "assembly"]
 
-class DualScalarSource:
+
+class DualScalarSource(pp.numerics.discretization.Discretization):
     """
     Discretization of the integrated source term
     int q * dx
@@ -22,14 +24,17 @@ class DualScalarSource:
     rhs = - param.get_source.keyword in a saddle point fashion.
     """
 
+    @pp.time_logger(sections=module_sections)
     def __init__(self, keyword="flow"):
         self.keyword = keyword
 
+    @pp.time_logger(sections=module_sections)
     def ndof(self, g):
         return g.num_cells + g.num_faces
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix_rhs(self, g, data):
-        """ Return the (null) matrix and right-hand side for a discretization of the
+        """Return the (null) matrix and right-hand side for a discretization of the
         integrated source term. Also discretize the necessary operators if the data
         dictionary does not contain a source term.
 
@@ -48,8 +53,9 @@ class DualScalarSource:
         """
         return self.assemble_matrix(g, data), self.assemble_rhs(g, data)
 
+    @pp.time_logger(sections=module_sections)
     def assemble_matrix(self, g, data):
-        """ Return the (null) matrix and for a discretization of the integrated source
+        """Return the (null) matrix and for a discretization of the integrated source
         term. Also discretize the necessary operators if the data dictionary does not
         contain a source term.
 
@@ -66,8 +72,9 @@ class DualScalarSource:
 
         return matrix_dictionary["source"]
 
+    @pp.time_logger(sections=module_sections)
     def assemble_rhs(self, g, data):
-        """ Return the rhs for a discretization of the integrated source term. Also
+        """Return the rhs for a discretization of the integrated source term. Also
         discretize the necessary operators if the data dictionary does not contain a
         source term.
 
@@ -89,15 +96,16 @@ class DualScalarSource:
         # The sources are assigned to the rows representing conservation.
         rhs = np.zeros(self.ndof(g))
         is_p = np.hstack(
-            (np.zeros(g.num_faces, dtype=np.bool), np.ones(g.num_cells, dtype=np.bool))
+            (np.zeros(g.num_faces, dtype=bool), np.ones(g.num_cells, dtype=bool))
         )
         # A minus sign is apparently needed here to be consistent with the user
         # side convention of the finite volume method
         rhs[is_p] = -sources
         return rhs
 
-    def discretize(self, g, data, faces=None):
-        """ Discretize an integrated source term.
+    @pp.time_logger(sections=module_sections)
+    def discretize(self, g, data):
+        """Discretize an integrated source term.
 
         Parameters:
             g : grid, or a subclass, with geometry fields computed.

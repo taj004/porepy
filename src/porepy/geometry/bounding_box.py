@@ -1,10 +1,14 @@
 """
 Compute bounding boxes of geometric objects.
 """
+import porepy as pp
+
+module_sections = ["geometry", "gridding"]
 
 
+@pp.time_logger(sections=module_sections)
 def from_points(pts, overlap=0):
-    """ Obtain a bounding box for a point cloud.
+    """Obtain a bounding box for a point cloud.
 
     Parameters:
         pts: np.ndarray (nd x npt). Point cloud. nd should be 2 or 3

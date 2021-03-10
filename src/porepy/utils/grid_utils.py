@@ -1,9 +1,16 @@
 import numpy as np
 import scipy.sparse as sps
 
+import porepy as pp
 
-def switch_sign_if_inwards_normal(g, nd, faces):
-    """ Construct a matrix that changes sign of quantities on faces with a
+module_sections = ["gridding", "grids"]
+
+
+@pp.time_logger(sections=module_sections)
+def switch_sign_if_inwards_normal(
+    g: pp.Grid, nd: int, faces: np.ndarray
+) -> sps.spmatrix:
+    """Construct a matrix that changes sign of quantities on faces with a
     normal that points into the grid.
 
     Parameters:
@@ -25,7 +32,7 @@ def switch_sign_if_inwards_normal(g, nd, faces):
 
     # Find out whether the boundary faces have outwards pointing normal vectors
     # Negative sign implies that the normal vector points inwards.
-    sgn = g.sign_of_faces(faces)
+    sgn, _ = g.signs_and_cells_of_boundary_faces(faces)
 
     # Create vector with the sign in the places of faces under consideration,
     # zeros otherwise

@@ -5,9 +5,11 @@ Created on Wed Apr 13 15:36:14 2016
 @author: eke001
 """
 from __future__ import division
+
 import random
-import numpy as np
 import unittest
+
+import numpy as np
 
 import porepy as pp
 
@@ -45,7 +47,7 @@ class TestMpfa(unittest.TestCase):
         bound = pp.BoundaryCondition(g, bnd_faces, ["dir"] * bnd_faces.size)
 
         # Python inverter is most efficient for small problems
-        flux, bound_flux, _, _ = pp.Mpfa("flow")._local_discr(
+        flux, bound_flux, *_ = pp.Mpfa("flow")._flux_discretization(
             g, perm, bound, inverter="python"
         )
         div = g.cell_faces.T
@@ -86,7 +88,7 @@ class TestMpfa(unittest.TestCase):
         )
 
         # Python inverter is most efficient for small problems
-        flux, bound_flux, _, _ = pp.Mpfa("flow")._local_discr(
+        flux, bound_flux, *_ = pp.Mpfa("flow")._flux_discretization(
             g, perm, bound, inverter="python"
         )
         div = g.cell_faces.T
@@ -112,7 +114,7 @@ class TestMpfa(unittest.TestCase):
         )
 
         # Python inverter is most efficient for small problems
-        flux, bound_flux, _, _ = pp.Mpfa("flow")._local_discr(
+        flux, bound_flux, *_ = pp.Mpfa("flow")._flux_discretization(
             g, perm, bound, inverter="python"
         )
         div = g.cell_faces.T
@@ -149,7 +151,7 @@ class TestMpfa(unittest.TestCase):
         )
 
         # Python inverter is most efficient for small problems
-        flux, bound_flux, _, _ = pp.Mpfa("flow")._local_discr(
+        flux, bound_flux, *_ = pp.Mpfa("flow")._flux_discretization(
             g, perm, bound, inverter="python"
         )
         div = g.cell_faces.T

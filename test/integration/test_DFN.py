@@ -3,6 +3,7 @@ Module for testing the discrete fracture network (DFN) with continuous pressure 
 """
 
 import unittest
+
 import numpy as np
 import scipy.sparse as sps
 
@@ -17,18 +18,15 @@ class TestDFN(unittest.TestCase):
         We use the numerical scheme MVEM.
         """
         dfn_dim = 1
-        f1 = np.array([[1.0, 1.0], [0.0, 2.0]])
-        f2 = np.array([[0.0, 2.0], [1.0, 1.0]])
 
         # create the grid bucket
-        gb = pp.meshing.cart_grid([f1, f2], [2, 2])
-        gb.compute_geometry()
+        gb, _ = pp.grid_buckets_2d.two_intersecting([2, 2], simplex=False)
         create_dfn(gb, dfn_dim)
 
         # setup data and assembler
         setup_data(gb)
         assembler, _ = setup_discr_mvem(gb)
-
+        dof_manager = assembler._dof_manager
         assembler.discretize()
         A, b = assembler.assemble_matrix_rhs()
         A = A.todense()
@@ -60,10 +58,10 @@ class TestDFN(unittest.TestCase):
         A_0 = np.matrix([[0.0]])
         b_0 = np.array([0])
 
-        global_dof = np.cumsum(np.append(0, np.asarray(assembler.full_dof)))
+        global_dof = np.cumsum(np.append(0, np.asarray(dof_manager.full_dof)))
 
         for g, _ in gb:
-            block = assembler.block_dof[(g, "flow")]
+            block = dof_manager.block_dof[(g, "flow")]
             dof = np.arange(global_dof[block], global_dof[block + 1])
 
             if g.dim == 1 and np.allclose(g.nodes[0], 1):  # f1
@@ -130,9 +128,9 @@ class TestDFN(unittest.TestCase):
         for e, d in gb.edges():
             gl, gh = gb.nodes_of_edge(e)
 
-            block_e = assembler.block_dof[(e, "flow")]
-            block_gl = assembler.block_dof[(gl, "flow")]
-            block_gh = assembler.block_dof[(gh, "flow")]
+            block_e = dof_manager.block_dof[(e, "flow")]
+            block_gl = dof_manager.block_dof[(gl, "flow")]
+            block_gh = dof_manager.block_dof[(gh, "flow")]
 
             dof_e = np.arange(global_dof[block_e], global_dof[block_e + 1])
             dof_gl = np.arange(global_dof[block_gl], global_dof[block_gl + 1])
@@ -165,17 +163,14 @@ class TestDFN(unittest.TestCase):
         We use the numerical scheme Tpfa.
         """
         dfn_dim = 1
-        f1 = np.array([[1.0, 1.0], [0.0, 2.0]])
-        f2 = np.array([[0.0, 2.0], [1.0, 1.0]])
-
-        # create the grid bucket
-        gb = pp.meshing.cart_grid([f1, f2], [2, 2])
-        gb.compute_geometry()
+        gb, _ = pp.grid_buckets_2d.two_intersecting([2, 2], simplex=False)
         create_dfn(gb, dfn_dim)
 
         # setup data and assembler
         setup_data(gb)
         assembler, _ = setup_discr_tpfa(gb)
+        dof_manager = assembler._dof_manager
+
         assembler.discretize()
         A, b = assembler.assemble_matrix_rhs()
         A = A.todense()
@@ -189,10 +184,10 @@ class TestDFN(unittest.TestCase):
         A_0 = np.matrix([[0.0]])
         b_0 = np.array([0])
 
-        global_dof = np.cumsum(np.append(0, np.asarray(assembler.full_dof)))
+        global_dof = np.cumsum(np.append(0, np.asarray(dof_manager.full_dof)))
 
         for g, _ in gb:
-            block = assembler.block_dof[(g, "flow")]
+            block = dof_manager.block_dof[(g, "flow")]
             dof = np.arange(global_dof[block], global_dof[block + 1])
 
             if g.dim == 1 and np.allclose(g.nodes[0], 1):  # f1
@@ -238,9 +233,9 @@ class TestDFN(unittest.TestCase):
         for e, _ in gb.edges():
             gl, gh = gb.nodes_of_edge(e)
 
-            block_e = assembler.block_dof[(e, "flow")]
-            block_gl = assembler.block_dof[(gl, "flow")]
-            block_gh = assembler.block_dof[(gh, "flow")]
+            block_e = dof_manager.block_dof[(e, "flow")]
+            block_gl = dof_manager.block_dof[(gl, "flow")]
+            block_gh = dof_manager.block_dof[(gh, "flow")]
 
             dof_e = np.arange(global_dof[block_e], global_dof[block_e + 1])
             dof_gl = np.arange(global_dof[block_gl], global_dof[block_gl + 1])
@@ -393,8 +388,7 @@ class TestDFN(unittest.TestCase):
 
 
 def setup_data(gb, key="flow"):
-    """ Setup the data
-    """
+    """Setup the data"""
     for g, d in gb:
         param = {}
         kxx = np.ones(g.num_cells)
@@ -432,12 +426,12 @@ def setup_discr_mvem(gb, key="flow"):
             d[pp.DISCRETIZATION] = {key: {"flux": p_trace}}
 
     for e, d in gb.edges():
-        g_slave, g_master = gb.nodes_of_edge(e)
+        g_secondary, g_primary = gb.nodes_of_edge(e)
         d[pp.PRIMARY_VARIABLES] = {key: {"cells": 1}}
         d[pp.COUPLING_DISCRETIZATION] = {
             "flux": {
-                g_slave: (key, "flux"),
-                g_master: (key, "flux"),
+                g_secondary: (key, "flux"),
+                g_primary: (key, "flux"),
                 e: (key, interface),
             }
         }
@@ -460,12 +454,12 @@ def setup_discr_tpfa(gb, key="flow"):
             d[pp.DISCRETIZATION] = {key: {"flux": p_trace}}
 
     for e, d in gb.edges():
-        g_slave, g_master = gb.nodes_of_edge(e)
+        g_secondary, g_primary = gb.nodes_of_edge(e)
         d[pp.PRIMARY_VARIABLES] = {key: {"cells": 1}}
         d[pp.COUPLING_DISCRETIZATION] = {
             "flux": {
-                g_slave: (key, "flux"),
-                g_master: (key, "flux"),
+                g_secondary: (key, "flux"),
+                g_primary: (key, "flux"),
                 e: (key, interface),
             }
         }
@@ -474,8 +468,8 @@ def setup_discr_tpfa(gb, key="flow"):
 
 
 def create_dfn(gb, dim):
-    """ given a GridBucket remove the higher dimensional node and
-    fix the internal mapping. """
+    """given a GridBucket remove the higher dimensional node and
+    fix the internal mapping."""
     # remove the +1 and -2 dimensional grids with respect to the
     # considered dfn, and re-write the node number
     gd = np.hstack((gb.grids_of_dimension(dim + 1), gb.grids_of_dimension(dim - 2)))
@@ -487,5 +481,4 @@ def create_dfn(gb, dim):
 
 
 if __name__ == "__main__":
-    TestDFN().test_tpfa_1()
     unittest.main()

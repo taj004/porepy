@@ -3,20 +3,13 @@
 Examples are to cut objects to lie within other objects, etc.
 """
 import numpy as np
-import networkx as nx
-
-import shapely.geometry as shapely_geometry
-import shapely.speedups as shapely_speedups
 
 import porepy as pp
 
-
-try:
-    shapely_speedups.enable()
-except AttributeError:
-    pass
+module_sections = ["geometry"]
 
 
+@pp.time_logger(sections=module_sections)
 def lines_by_polygon(poly_pts, pts, edges):
     """
     Compute the intersections between a polygon (also not convex) and a set of lines.
@@ -30,11 +23,20 @@ def lines_by_polygon(poly_pts, pts, edges):
 
     Returns:
     int_pts (np.ndarray, 2xn): the point associated to the lines after the intersection
-    int_edges (np.ndarray, 2xn): for each column the id of the points for the line after the
-        intersection. If the input edges have tags, stored in rows [2:], these will be
-        preserved.
+    int_edges (np.ndarray, 2xn): for each column the id of the points for the line after
+        the intersection. If the input edges have tags, stored in rows [2:], these will
+        be preserved.
+    edges_kept (np.ndarray, n): Column index of the kept edges. This will have recurring
+        values if an edge is cut by a non-convex domain.
 
     """
+    import shapely.geometry as shapely_geometry
+    import shapely.speedups as shapely_speedups
+
+    try:
+        shapely_speedups.enable()
+    except AttributeError:
+        pass
     # it stores the points after the intersection
     int_pts = np.empty((2, 0))
     # define the polygon
@@ -48,20 +50,23 @@ def lines_by_polygon(poly_pts, pts, edges):
     for ei, e in enumerate(edges.T):
         # define the line
         line = shapely_geometry.LineString([pts[:2, e[0]], pts[:2, e[1]]])
-        # compute the intersections between the poligon and the current line
+        # compute the intersections between the polygon and the current line
         int_lines = poly.intersection(line)
         # only line or multilines are considered, no points
-        if type(int_lines) is shapely_geometry.LineString:
+        if (
+            isinstance(int_lines, shapely_geometry.LineString)
+            and len(int_lines.coords) > 0
+        ):
             # consider the case of single intersection by avoiding to consider
             # lines on the boundary of the polygon
-            if not int_lines.touches(poly):
+            if not int_lines.touches(poly) and int_lines.length > 0:
                 int_pts = np.c_[int_pts, np.array(int_lines.xy)]
                 edges_kept.append(ei)
         elif type(int_lines) is shapely_geometry.MultiLineString:
             # consider the case of multiple intersections by avoiding to consider
             # lines on the boundary of the polygon
             for int_line in int_lines:
-                if not int_line.touches(poly):
+                if not int_line.touches(poly) and int_line.length > 0:
                     int_pts = np.c_[int_pts, np.array(int_line.xy)]
                     edges_kept.append(ei)
 
@@ -75,13 +80,14 @@ def lines_by_polygon(poly_pts, pts, edges):
         int_edges = np.vstack((int_edges, edges[2:, edges_kept]))
     else:
         # If no edges are kept, return an empty array with the right dimensions
-        int_edges = np.empty((edges.shape[0], 0))
+        int_edges = np.empty((edges.shape[0], 0), dtype=int)
 
-    return int_pts, int_edges
+    return int_pts, int_edges, np.array(edges_kept, dtype=int)
 
 
+@pp.time_logger(sections=module_sections)
 def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
-    """ Constrain a seort of polygons in 3d to lie inside a, generally non-convex, polyhedron.
+    """Constrain a seort of polygons in 3d to lie inside a, generally non-convex, polyhedron.
 
     Polygons not inside the polyhedron will be removed from descriptions.
     For non-convex polyhedra, polygons can be split in several parts.
@@ -100,6 +106,7 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
             polygon
 
     """
+    import networkx as nx
 
     if isinstance(polygons, np.ndarray):
         polygons = [polygons]
@@ -114,12 +121,14 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
         all_poly = [poly] + polyhedron
 
         # Find intersections
-        coord, point_ind, is_bound, pairs, seg_vert = pp.intersections.polygons_3d(
-            all_poly
+        coord, point_ind, _, _, seg_vert_all = pp.intersections.polygons_3d(
+            all_poly, target_poly=np.arange(1)
         )
 
         # Find indices of the intersection points for this polygon (the first one)
         isect_poly = point_ind[0]
+        # Only consider segment-vertex information for the first polygon
+        seg_vert = seg_vert_all[0]
 
         # If there are no intersection points, we just need to test if the
         # entire polygon is inside the polyhedral
@@ -201,8 +210,6 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
 
         # From here on, we will lean heavily on information on segments that cross the
         # boundary.
-        # Only consider segment-vertex information for the first polygon
-        seg_vert = seg_vert[0]
 
         # The test for interior points does not check if the segment crosses the
         # domain boundary due to a convex domain; these must be removed.
@@ -211,7 +218,7 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
 
         # First, count the number of times a segment of the polygon is associated with
         # an intersection point
-        count_boundary_segment = np.zeros(num_vert, dtype=np.int)
+        count_boundary_segment = np.zeros(num_vert, dtype=int)
         for isect in seg_vert:
             # Only consider segment intersections, not interior (len==0), and vertexes
             if len(isect) > 0 and isect[1]:
@@ -241,13 +248,13 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
         segments_interior_boundary = []
 
         # Check if individual vertexs are on the boundary
-        vertex_on_boundary = np.zeros(num_vert, np.bool)
+        vertex_on_boundary = np.zeros(num_vert, bool)
         for isect in seg_vert:
             if len(isect) > 0 and not isect[1]:
                 vertex_on_boundary[isect[0]] = 1
 
         # Storage of the intersections associated with each segment of the original polygon
-        isects_of_segment = np.zeros(num_vert, np.object)
+        isects_of_segment = np.zeros(num_vert, object)
         for i in range(num_vert):
             isects_of_segment[i] = []
 
@@ -281,16 +288,23 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
                     if len(isects_of_segment[prev_ind[isect[0]]]) == 0:
                         isects_of_segment[prev_ind[isect[0]]].append([])
 
-        # For all original segments that have intersection points (or vertex on a
-        # polyhedron boundary), find all points along the segment (original endpoints
+        # For all original segments that have intersection points (or vertex) on a
+        # polyhedron boundary, find all points along the segment (original endpoints
         # and intersection points. Find out which of these sub-segments are inside and
-        # outside the polyhedron, remove exterior parts
+        # outside the polyhedron, remove exterior parts.
+        # FIXME: The above is not correct in the case where a polygon segment lies
+        # in the plane of several parallel boundary surfaces.
         for seg_ind in range(num_vert):
             if len(isects_of_segment[seg_ind]) == 0:
                 continue
             # Index and coordinate of intersection points on this segment
-            loc_isect_ind = np.asarray(isects_of_segment[seg_ind], dtype=np.int).ravel()
-            isect_coord = coord[:, loc_isect_ind]
+            loc_isect_ind = np.asarray(isects_of_segment[seg_ind], dtype=int).ravel()
+
+            # Consider unique intersection points; there may be repititions in cases
+            # where the polyhedron has multiple parallel sides.
+            isect_coord, _, _ = pp.utils.setmembership.unique_columns_tol(
+                coord[:, loc_isect_ind], tol
+            )
 
             # Start and end of the full segment
             start = poly[:, seg_ind].reshape((-1, 1))
@@ -329,7 +343,7 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
                 [i for i in segments_interior_boundary]
             ).T
         else:
-            segments_interior_boundary = np.zeros((2, 0), dtype=np.int)
+            segments_interior_boundary = np.zeros((2, 0), dtype=int)
 
         # At this stage, we have identified all segments, possibly with duplicates.
         # Next task is to arrive at a unique representation of the segments.
@@ -349,6 +363,9 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
         unique_segments, *rest = pp.utils.setmembership.unique_columns_tol(
             unique_segments
         )
+        # Remove point segments.
+        point_segment = unique_segments[0] == unique_segments[1]
+        unique_segments = unique_segments[:, np.logical_not(point_segment)]
 
         # The final stage is to collect the constrained polygons.
         # If the segments are connected, which will always be the case if the
@@ -375,16 +392,54 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
             # differently depending on whether the polygon forms a closed circle
             # or not
             count = np.bincount(el.ravel())
+
+            if np.any(count > 2):
+                # A single component (polygon) has nodes occuring more than twice.
+                # This is presumably caused by overlapping segments in the constrained
+                # polygon, which can happen if the constraining polyhedron has
+                # parallel sides.
+                # Remove these by projecting to the 2d plane of the main polygon, and
+                # then use standard function for intersection removal there.
+                center = unique_coords.mean(axis=1).reshape((-1, 1))
+                coords_centered = unique_coords - center
+                R = pp.map_geometry.project_plane_matrix(coords_centered)
+                pt = R.dot(coords_centered)[:2]
+                _, el, _ = pp.intersections.split_intersecting_segments_2d(pt, el, tol)
+
             if np.any(count == 1):
                 # There should be exactly two loose ends, if not, this is really
                 # several polygons, and who knows how we ended up there.
                 assert np.sum(count == 1) == 2
-                sorted_pairs = pp.utils.sort_points.sort_point_pairs(
+                sorted_pairs, _ = pp.utils.sort_points.sort_point_pairs(
                     el, is_circular=False
                 )
                 inds = np.hstack((sorted_pairs[0], sorted_pairs[1, -1]))
+                # TODO: check for hanging nodes here?
             else:
-                sorted_pairs = pp.utils.sort_points.sort_point_pairs(el)
+                sorted_pairs, _ = pp.utils.sort_points.sort_point_pairs(el)
+
+                # Check for hanging nodes
+                hang_ind = pp.geometry_property_checks.polygon_hanging_nodes(
+                    unique_coords, sorted_pairs
+                )
+                if hang_ind.size > 0:
+                    # We will need to decrease the index of the edges with hanging nodes
+                    # as we delete previous edges (with hanging nodes)
+                    decrease = 0
+                    for edge_ind in np.sort(hang_ind):  # sort to be sure
+                        ei = edge_ind - decrease  # effective index
+                        # Adjust the endpoint of the this edge
+                        if ei < sorted_pairs.shape[1] - 1:
+                            sorted_pairs[1, ei] = sorted_pairs[1, ei + 1]
+                            sorted_pairs = np.delete(sorted_pairs, ei + 1, axis=1)
+                        else:
+                            # special treatment at the end of the node
+                            sorted_pairs[1, ei] = sorted_pairs[1, 0]
+                            sorted_pairs = np.delete(sorted_pairs, 0, axis=1)
+
+                        # Adjust the decrease index
+                        decrease += 1
+
                 inds = sorted_pairs[0]
 
             # And there we are
@@ -394,6 +449,7 @@ def polygons_by_polyhedron(polygons, polyhedron, tol=1e-8):
     return constrained_polygons, np.array(orig_poly_ind)
 
 
+@pp.time_logger(sections=module_sections)
 def snap_points_to_segments(p_edges, edges, tol, p_to_snap=None):
     """
     Snap points in the proximity of lines to the lines.

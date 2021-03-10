@@ -5,11 +5,15 @@ zero) default values for the parameters required by the discretization objects.
 """
 
 import numpy as np
+
 import porepy as pp
 
+module_sections = ["parameters"]
 
+
+@pp.time_logger(sections=module_sections)
 def flow_dictionary(g, in_data=None):
-    """ Dictionary with parameters for standard flow problems.
+    """Dictionary with parameters for standard flow problems.
 
     All parameters listed below which are not specified in in_data are assigned default
     values. Additional parameters may be passed in in_data.
@@ -41,8 +45,9 @@ def flow_dictionary(g, in_data=None):
     return d
 
 
+@pp.time_logger(sections=module_sections)
 def transport_dictionary(g, in_data=None):
-    """ Dictionary with parameters for standard transport problems.
+    """Dictionary with parameters for standard transport problems.
 
     All parameters listed below which are not specified in in_data are assigned default
     values. Additional parameters may be passed in in_data.
@@ -75,8 +80,9 @@ def transport_dictionary(g, in_data=None):
     return d
 
 
+@pp.time_logger(sections=module_sections)
 def mechanics_dictionary(g, in_data=None):
-    """ Dictionary with parameters for standard mechanics problems.
+    """Dictionary with parameters for standard mechanics problems.
 
     All parameters listed below which are not specified in in_data are assigned default
     values. Additional parameters may be passed in in_data.

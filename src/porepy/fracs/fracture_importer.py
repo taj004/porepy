@@ -1,9 +1,14 @@
-import numpy as np
 import csv
+
+import gmsh
+import numpy as np
 
 import porepy as pp
 
+module_sections = ["gridding"]
 
+
+@pp.time_logger(sections=module_sections)
 def network_3d_from_csv(file_name, has_domain=True, tol=1e-4, **kwargs):
     """
     Create the fracture network from a set of 3d fractures stored in a csv file and
@@ -75,6 +80,7 @@ def network_3d_from_csv(file_name, has_domain=True, tol=1e-4, **kwargs):
         return pp.FractureNetwork3d(frac_list, tol=tol)
 
 
+@pp.time_logger(sections=module_sections)
 def elliptic_network_3d_from_csv(file_name, has_domain=True, tol=1e-4, degrees=False):
 
     """
@@ -137,7 +143,7 @@ def elliptic_network_3d_from_csv(file_name, has_domain=True, tol=1e-4, degrees=F
             maj_ax_ang = data[5] * (1 - degrees + degrees * np.pi / 180)
             strike_ang = data[6] * (1 - degrees + degrees * np.pi / 180)
             dip_ang = data[7] * (1 - degrees + degrees * np.pi / 180)
-            num_points = data[8]
+            num_points = int(data[8])
 
             frac_list.append(
                 pp.EllipticFracture(
@@ -151,6 +157,7 @@ def elliptic_network_3d_from_csv(file_name, has_domain=True, tol=1e-4, degrees=F
         return pp.FractureNetwork3d(frac_list, tol=tol)
 
 
+@pp.time_logger(sections=module_sections)
 def network_2d_from_csv(
     f_name,
     tagcols=None,
@@ -159,9 +166,9 @@ def network_2d_from_csv(
     polyline=False,
     return_frac_id=False,
     domain=None,
-    **kwargs
+    **kwargs,
 ):
-    """ Read csv file with fractures to obtain fracture description.
+    """Read csv file with fractures to obtain fracture description.
 
     Create the grid bucket from a set of fractures stored in a csv file and a
     domain. In the csv file, we assume one of the two following structures:
@@ -253,8 +260,8 @@ def network_2d_from_csv(
             edges = np.hstack((edges, edges_loc))
             edges_frac_id = np.hstack((edges_frac_id, [fi] * edges_loc.shape[1]))
 
-        edges = edges.astype(np.int)
-        edges_frac_id = edges_frac_id.astype(np.int)
+        edges = edges.astype(int)
+        edges_frac_id = edges_frac_id.astype(int)
 
     else:
         # Let the edges correspond to the ordering of the fractures
@@ -272,10 +279,10 @@ def network_2d_from_csv(
 
     pts, _, old_2_new = pp.utils.setmembership.unique_columns_tol(pts, tol=tol)
 
-    edges[:2] = old_2_new[edges[:2].astype(np.int)]
+    edges[:2] = old_2_new[edges[:2].astype(int)]
 
     to_remove = np.where(edges[0, :] == edges[1, :])[0]
-    edges = np.delete(edges, to_remove, axis=1).astype(np.int)
+    edges = np.delete(edges, to_remove, axis=1).astype(int)
 
     if not np.all(np.diff(edges[:2], axis=0) != 0):
         raise ValueError
@@ -284,7 +291,7 @@ def network_2d_from_csv(
 
     if return_frac_id:
         edges_frac_id = np.delete(edges_frac_id, to_remove)
-        return network, edges_frac_id.astype(np.int)
+        return network, edges_frac_id.astype(int)
     else:
         return network
 
@@ -292,8 +299,9 @@ def network_2d_from_csv(
 # ------------ End of CSV-based functions. Start of gmsh related --------------#
 
 
-def dfm_from_gmsh(file_name, dim, network=None, **kwargs):
-    """ Generate a GridBucket from a gmsh file.
+@pp.time_logger(sections=module_sections)
+def dfm_from_gmsh(file_name: str, dim: int, **kwargs) -> pp.GridBucket:
+    """Generate a GridBucket from a gmsh file.
 
     If the provided file is input for gmsh (.geo, not .msh), gmsh will be called
     to generate the mesh before the GridBucket is constructed.
@@ -303,15 +311,11 @@ def dfm_from_gmsh(file_name, dim, network=None, **kwargs):
             or .msh. In the former case, gmsh will be called upon to generate the
             mesh before the mixed-dimensional mesh is constructed.
         dim (int): Dimension of the problem. Should be 2 or 3.
-        network (FractureNetwork3d, only if dim==3): FractureNetwork. Needed
-            for the post-processing from gmsh, but only in 3d.
 
     Returns:
         GridBucket: Mixed-dimensional grid as contained in the gmsh file.
 
     """
-
-    verbose = kwargs.get("verbose", 1)
 
     # run gmsh to create .msh file if
     if file_name[-4:] == ".msh":
@@ -322,27 +326,35 @@ def dfm_from_gmsh(file_name, dim, network=None, **kwargs):
         in_file = file_name + ".geo"
         out_file = file_name + ".msh"
 
-        gmsh_opts = kwargs.get("gmsh_opts", {})
-        gmsh_verbose = kwargs.get("gmsh_verbose", verbose)
-        gmsh_opts["-v"] = gmsh_verbose
-        gmsh_status = pp.grids.gmsh.gmsh_interface.run_gmsh(
-            in_file, out_file, dims=dim, **gmsh_opts
-        )
-        if verbose:
-            print("Gmsh finished with status " + str(gmsh_status))
+        # initialize gmsh
+        gmsh.initialize()
+        # Reduce verbosity
+        gmsh.option.setNumber("General.Verbosity", 3)
+        # read the specified file.
+        gmsh.merge(in_file)
+
+        # Generate mesh, write
+        gmsh.model.mesh.generate(dim=dim)
+        gmsh.write(out_file)
+
+        # Wipe Gmsh's memory
+        gmsh.finalize()
 
     if dim == 2:
         grids = pp.fracs.simplex.triangle_grid_from_gmsh(out_file, **kwargs)
     elif dim == 3:
-        if network is None:
-            raise ValueError("Need access to the network used to produce the .geo file")
-        grids = pp.fracs.simplex.tetrahedral_grid_from_gmsh(network, out_file, **kwargs)
+        grids = pp.fracs.simplex.tetrahedral_grid_from_gmsh(
+            file_name=out_file, **kwargs
+        )
+    else:
+        raise ValueError(f"Unknown dimension, dim: {dim}")
     return pp.meshing.grid_list_to_grid_bucket(grids, **kwargs)
 
 
 # ------------ End of gmsh-based functions, start of fab related --------------#
 
 
+@pp.time_logger(sections=module_sections)
 def dfm_3d_from_fab(
     file_name, tol=1e-4, domain=None, return_domain=False, **mesh_kwargs
 ):
@@ -366,6 +378,7 @@ def dfm_3d_from_fab(
     if domain is None:
         domain = network.bounding_box()
 
+    # TODO: No reference to simplex_grid in pp.fracs.meshing.py
     gb = pp.meshing.simplex_grid(domain=domain, network=network, **mesh_kwargs)
 
     if return_domain:
@@ -377,8 +390,9 @@ def dfm_3d_from_fab(
 # ------------------------------------------------------------------------------#
 
 
+@pp.time_logger(sections=module_sections)
 def network_3d_from_fab(f_name, return_all=False, tol=None):
-    """ Read fractures from a .fab file, as specified by FracMan.
+    """Read fractures from a .fab file, as specified by FracMan.
 
     The filter is based on the .fab-files available at the time of writing, and
     may not cover all options available.
@@ -401,6 +415,7 @@ def network_3d_from_fab(f_name, return_all=False, tol=None):
 
     """
 
+    @pp.time_logger(sections=module_sections)
     def read_keyword(line):
         # Read a single keyword, on the form  key = val
         words = line.split("=")
@@ -408,6 +423,7 @@ def network_3d_from_fab(f_name, return_all=False, tol=None):
         val = words[1].strip()
         return key, val
 
+    @pp.time_logger(sections=module_sections)
     def read_section(f, section_name):
         # Read a section of the file, surrounded by a BEGIN / END wrapping
         d = {}
@@ -417,6 +433,7 @@ def network_3d_from_fab(f_name, return_all=False, tol=None):
             k, v = read_keyword(line)
             d[k] = v
 
+    @pp.time_logger(sections=module_sections)
     def read_fractures(f, is_tess=False):
         # Read the fracture
         fracs = []

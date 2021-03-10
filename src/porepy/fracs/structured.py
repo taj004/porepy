@@ -8,14 +8,14 @@ import scipy.sparse as sps
 
 import porepy as pp
 
-from porepy.grids.gmsh import mesh_2_grid
-from porepy.grids import constants
-from porepy.fracs import fractures
-from porepy.utils import half_space
-from porepy.grids import structured, point_grid
+from . import msh_2_grid
+from .gmsh_interface import Tags
+
+module_sections = ["gridding"]
 
 
-def cart_grid_3d(fracs, nx, physdims=None):
+@pp.time_logger(sections=module_sections)
+def _cart_grid_3d(fracs, nx, physdims=None):
     """
     Create grids for a domain with possibly intersecting fractures in 3d.
 
@@ -40,10 +40,10 @@ def cart_grid_3d(fracs, nx, physdims=None):
 
     Examples
     --------
-    frac1 = np.array([[1,1,4,4], [1,4,4,1], [2,2,2,2]])
-    frac2 = np.array([[2,2,2,2], [1,1,4,4], [1,4,4,1]])
+    frac1 = np.array([[1, 1, 4, 4], [1, 4, 4, 1], [2, 2, 2, 2]])
+    frac2 = np.array([[2, 2, 2, 2], [1, 1, 4, 4], [1, 4, 4, 1]])
     fracs = [frac1, frac2]
-    gb = cart_grid_3d(fracs, [5,5,5])
+    gb = cart_grid_3d(fracs, [5, 5, 5])
     """
 
     nx = np.asarray(nx)
@@ -55,7 +55,7 @@ def cart_grid_3d(fracs, nx, physdims=None):
         physdims = np.asarray(physdims)
 
     # We create a 3D cartesian grid. The global node mapping is trivial.
-    g_3d = structured.CartGrid(nx, physdims=physdims)
+    g_3d = pp.CartGrid(nx, physdims=physdims)
     g_3d.global_point_ind = np.arange(g_3d.num_nodes)
     g_3d.compute_geometry()
     g_2d = []
@@ -101,7 +101,7 @@ def cart_grid_3d(fracs, nx, physdims=None):
         # We find all the faces inside the convex hull defined by the
         # rectangle. To find the faces on the fracture plane, we remove any
         # faces that are further than tol from the snapped fracture plane.
-        in_hull = half_space.half_space_int(normal, f_s, g_3d.face_centers)
+        in_hull = pp.utils.half_space.half_space_int(normal, f_s, g_3d.face_centers)
         f_tag = np.logical_and(
             in_hull,
             np.logical_and(
@@ -125,7 +125,7 @@ def cart_grid_3d(fracs, nx, physdims=None):
     # but we use the FractureNetwork class for now.
     frac_list = []
     for f in fracs:
-        frac_list.append(fractures.Fracture(f))
+        frac_list.append(pp.Fracture(f))
     # Combine the fractures into a network
     network = pp.FractureNetwork3d(frac_list)
     # Impose domain boundary. For the moment, the network should be immersed in
@@ -151,14 +151,32 @@ def cart_grid_3d(fracs, nx, physdims=None):
     # And tags identifying points and edges corresponding to normal
     # fractures, domain boundaries and subdomain boundaries. Only the
     # entities corresponding to normal fractures should actually be gridded.
-    edge_tags, intersection_points = network._classify_edges(poly)
-    const = constants.GmshConstants()
-    auxiliary_points, edge_tags = network.on_domain_boundary(edges, edge_tags)
-    bound_and_aux = np.array([const.DOMAIN_BOUNDARY_TAG, const.AUXILIARY_TAG])
+
+    # TODO: Constraints have not been implemented for structured DFM grids.
+    # Simply pass nothing for now, not sure how do deal with this, or if it at all is
+    # meaningful.
+    edge_tags, _, _ = network._classify_edges(poly, [])
+
+    auxiliary_points, edge_tags = network._on_domain_boundary(edges, edge_tags)
+    bound_and_aux = np.array(
+        [Tags.DOMAIN_BOUNDARY_LINE.value, Tags.AUXILIARY_LINE.value]
+    )
+
+    # From information of which lines are internal, we can find intersection points.
+    # This part will become more elaborate if we introduce constraints, see the
+    # FractureNetwork3d class.
+
+    # Find all points on fracture intersection lines
+    isect_p = edges[:, edge_tags == Tags.FRACTURE_INTERSECTION_LINE.value].ravel()
+    # Count the number of occurences
+    num_occ_pt = np.bincount(isect_p)
+    # Intersection poitns if
+    intersection_points = np.where(num_occ_pt > 1)[0]
+
     edges = np.vstack((edges, edge_tags))
 
     # Loop through the edges to make 1D grids. Ommit the auxiliary edges.
-    for e in np.ravel(np.where(edges[2] == const.FRACTURE_INTERSECTION_LINE_TAG)):
+    for e in np.ravel(np.where(edges[2] == Tags.FRACTURE_INTERSECTION_LINE.value)):
         # We find the start and end point of each fracture intersection (1D
         # grid) and then the corresponding global node index.
         if np.isin(edge_tags[e], bound_and_aux):
@@ -171,18 +189,18 @@ def cart_grid_3d(fracs, nx, physdims=None):
             loc_coord.shape[1] > 1
         ), "1d grid in intersection should span\
             more than one node"
-        g = mesh_2_grid.create_embedded_line_grid(loc_coord, nodes)
+        g = msh_2_grid.create_embedded_line_grid(loc_coord, nodes)
         g_1d.append(g)
 
     # Create 0D grids
     # Here we also use the intersection information from the FractureNetwork
     # class. No grids for auxiliary points.
     for p in intersection_points:
-        if auxiliary_points[p]:
+        if auxiliary_points[p] == Tags.DOMAIN_BOUNDARY_POINT:
             continue
         node = np.argmin(pp.distances.point_pointset(pts[:, p], g_3d.nodes))
         assert np.allclose(g_3d.nodes[:, node], pts[:, p])
-        g = point_grid.PointGrid(g_3d.nodes[:, node])
+        g = pp.PointGrid(g_3d.nodes[:, node])
         g.global_point_ind = np.asarray(node)
         g_0d.append(g)
 
@@ -190,7 +208,8 @@ def cart_grid_3d(fracs, nx, physdims=None):
     return grids
 
 
-def cart_grid_2d(fracs, nx, physdims=None):
+@pp.time_logger(sections=module_sections)
+def _cart_grid_2d(fracs, nx, physdims=None):
     """
     Create grids for a domain with possibly intersecting fractures in 2d.
 
@@ -214,10 +233,10 @@ def cart_grid_2d(fracs, nx, physdims=None):
 
     Examples
     --------
-    frac1 = np.array([[1,4],[2,2]])
-    frac2 = np.array([[2,2],[1,4]])
-    fracs = [frac1,frac2]
-    gb = cart_grid_2d(fracs, [5,5])
+    frac1 = np.array([[1, 4], [2, 2]])
+    frac2 = np.array([[2, 2], [1, 4]])
+    fracs = [frac1, frac2]
+    gb = cart_grid_2d(fracs, [5, 5])
     """
     nx = np.asarray(nx)
     if physdims is None:
@@ -227,7 +246,7 @@ def cart_grid_2d(fracs, nx, physdims=None):
     else:
         physdims = np.asarray(physdims)
 
-    g_2d = structured.CartGrid(nx, physdims=physdims)
+    g_2d = pp.CartGrid(nx, physdims=physdims)
     g_2d.global_point_ind = np.arange(g_2d.num_nodes)
     g_2d.compute_geometry()
     g_1d = []
@@ -244,14 +263,14 @@ def cart_grid_2d(fracs, nx, physdims=None):
         nodes = _find_nodes_on_line(g_2d, nx, f[:, 0], f[:, 1])
         # nodes = np.unique(nodes)
         loc_coord = g_2d.nodes[:, nodes]
-        g = mesh_2_grid.create_embedded_line_grid(loc_coord, nodes)
+        g = msh_2_grid.create_embedded_line_grid(loc_coord, nodes)
         g_1d.append(g)
         shared_nodes[nodes] += 1
 
     # Create 0-D grids
     if np.any(shared_nodes > 1):
         for global_node in np.argwhere(shared_nodes > 1).ravel():
-            g = point_grid.PointGrid(g_2d.nodes[:, global_node])
+            g = pp.PointGrid(g_2d.nodes[:, global_node])
             g.global_point_ind = np.asarray(global_node)
             g_0d.append(g)
 
@@ -259,6 +278,7 @@ def cart_grid_2d(fracs, nx, physdims=None):
     return grids
 
 
+@pp.time_logger(sections=module_sections)
 def _create_embedded_2d_grid(loc_coord, glob_id):
     """
     Create a 2d grid that is embedded in a 3d grid.
@@ -285,7 +305,7 @@ def _create_embedded_2d_grid(loc_coord, glob_id):
     unique_x = np.unique(sorted_coord[0])
     unique_y = np.unique(sorted_coord[1])
     # assert unique_x.size == unique_y.size
-    g = structured.TensorGrid(unique_x, unique_y)
+    g = pp.TensorGrid(unique_x, unique_y)
     assert np.all(g.nodes[0:2] - sorted_coord == 0)
 
     # Project back to active dimension
@@ -303,6 +323,7 @@ def _create_embedded_2d_grid(loc_coord, glob_id):
     return g
 
 
+@pp.time_logger(sections=module_sections)
 def _find_nodes_on_line(g, nx, s_pt, e_pt):
     """
     We have the start and end point of the fracture. From this we find the
