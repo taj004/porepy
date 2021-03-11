@@ -863,7 +863,7 @@ class SemiLocalCoupling(RobinCoupling):
     """
 
     def __init__(self, keyword, discr_primary, discr_secondary=None):
-        super().__init__(keyword)
+        super().__init__(keyword, discr_primary, discr_secondary)
 
         # This interface law will have direct interface coupling to represent
         # the influence of the flux boundary condition of the secondary
@@ -941,25 +941,19 @@ class SemiLocalCoupling(RobinCoupling):
             internal boundary in some numerical methods (Read: VEM, RT0)
 
         """
+        # Use methods for standard RobinCoupling to assemble standard terms.
         cc, rhs = super().assemble_matrix_rhs(
             g_primary, g_secondary, data_primary, data_secondary, data_edge, matrix
         )
 
-        matrix_dictionary_edge: Dict[str, sps.spmatrix] = data_edge[
-            pp.DISCRETIZATION_MATRICES
-        ][self.keyword]
-
-        mg = data_edge["mortar_grid"]
-
         primary_ind = 0
         secondary_ind = 1
 
-        # The convention, for now, is to put the higher dimensional information
-        # in the first column and row in matrix, lower-dimensional in the second
-        # and mortar variables in the third
+        # Assemble contribution from secondary grid to the pressure jump at the mortar
         self.discr_secondary.assemble_int_bound_grad_p(
             g_secondary, data_secondary, data_edge, cc, matrix, rhs, secondary_ind
         )
+        # Assemble vector source term induced by the mortar flux.
         self.discr_secondary.assemble_int_bound_vector_source(
             g_secondary, data_secondary, data_edge, cc, matrix, rhs, secondary_ind
         )

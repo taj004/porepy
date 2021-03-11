@@ -19,7 +19,7 @@ module_sections = ["numerics", "discretization"]
 class RT0(pp.numerics.vem.dual_elliptic.DualElliptic):
     @pp.time_logger(sections=module_sections)
     def __init__(self, keyword: str) -> None:
-        super(RT0, self).__init__(keyword, "RT0")
+        super().__init__(keyword, "RT0")
         # variable name to store the structure that map a cell to the opposite nodes
         # of the local faces
         self.cell_face_to_opposite_node = "rt0_class_cell_face_to_opposite_node"
@@ -184,8 +184,7 @@ class RT0(pp.numerics.vem.dual_elliptic.DualElliptic):
         matrix_dictionary[self.div_matrix_key] = div
         matrix_dictionary[self.vector_proj_key] = proj
 
-    @staticmethod
-    def project_flux_matrix(g, data):
+    def project_flux_matrix(self, g, data):
         """Construct the matrix that will project the velocity computed with a rt0
         discretization to obtain a piecewise constant vector field, one triplet for each cell.
 
@@ -226,8 +225,6 @@ class RT0(pp.numerics.vem.dual_elliptic.DualElliptic):
 
         nodes, _, _ = sps.find(g.face_nodes)
 
-        P0u = np.zeros((3, g.num_cells))
-
         # Allocate the data to store matrix entries, that's the most efficient
         # way to create a sparse matrix.
         size = 3 * (g.dim + 1) * g.num_cells
@@ -240,13 +237,18 @@ class RT0(pp.numerics.vem.dual_elliptic.DualElliptic):
         dataIJ = np.empty(size)
         idx = 0
 
+        # compute the oppisite node per face
+        self._compute_cell_face_to_opposite_node(g, data)
+        cell_face_to_opposite_node = data[self.cell_face_to_opposite_node]
+
+
         for c in np.arange(g.num_cells):
             loc = slice(g.cell_faces.indptr[c], g.cell_faces.indptr[c + 1])
             faces_loc = faces[loc]
             A = np.zeros((3, faces_loc.size))
 
             # find the opposite node id for each face
-            node = RT0.opposite_side_node(g.face_nodes, nodes, faces_loc)
+            node = cell_face_to_opposite_node[c]
 
             # extract the coordinates
             center = np.tile(c_centers[:, c], (node.size, 1)).T

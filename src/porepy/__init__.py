@@ -128,6 +128,7 @@ from porepy.numerics.fem.rt0 import RT0
 from porepy.numerics.interface_laws.elliptic_interface_laws import (
     RobinCoupling,
     FluxPressureContinuity,
+    SemiLocalCoupling,
 )
 
 from porepy.numerics.interface_laws.cell_dof_face_dof_map import CellDofFaceDofMap

@@ -462,7 +462,7 @@ class FVElliptic(pp.EllipticDiscretization):
         cc,
         matrix,
         rhs,
-        use_slave_proj=False,
+        use_secondary_proj=False,
     ):
         """Assemble the contribution from an internal
         boundary, manifested as a condition on the boundary pressure.
@@ -477,24 +477,24 @@ class FVElliptic(pp.EllipticDiscretization):
                 grid to the main grid.
             cc (block matrix, 3x3): Block matrix of size 3 x 3, whwere each block represents
                 coupling between variables on this interface. Index 0, 1 and 2
-                represent the master grid, the primary and secondary interface,
+                represent the primary grid, the primary and secondary interface,
                 respectively.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
             rhs (block_array 3x1): Block matrix of size 3 x 1, representing the right hand
-                side of this coupling. Index 0, 1 and 2 represent the master grid,
+                side of this coupling. Index 0, 1 and 2 represent the primary grid,
                 the primary and secondary interface, respectively.
 
         """
 
-        mg = data_edge["mortar_grid"]
+        mg: pp.MortarGrid = data_edge["mortar_grid"]
 
-        if use_slave_proj:
-            proj = mg.master_to_mortar_avg(3)
+        if use_secondary_proj:
+            proj = mg.primary_to_mortar_avg(3)
         else:
-            proj = mg.slave_to_mortar_avg(3)
+            proj = mg.secondaryto_mortar_avg(3)
 
-        rt0_flux_vector = pp.RT0.project_flux_matrix(g, data_grid)
+        rt0_flux_vector = pp.RT0(self.keyword).project_flux_matrix(g, data_grid)
 
         parameter_dictionary = data_grid[pp.PARAMETERS][self.keyword]
         parameter_dictionary_edge = data_edge[pp.PARAMETERS][self.keyword]
@@ -642,11 +642,11 @@ class FVElliptic(pp.EllipticDiscretization):
                 mixed-dimensional grid.
             data_edge (dictionary): Data dictionary for the edge in the
                 mixed-dimensional grid.
-            grid_swap (boolean): If True, the grid g is identified with the @
-                slave side of the mortar grid in data_adge.
+            grid_swap (boolean): If True, the grid g is identified with the
+                secondary side of the mortar grid in data_adge.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -664,13 +664,13 @@ class FVElliptic(pp.EllipticDiscretization):
         if use_secondary_proj:
             proj = mg.primary_to_mortar_avg(3)
         else:
-            proj = mg.slave_to_mortar_avg(3)
+            proj = mg.secondary_to_mortar_avg(3)
 
-        rt0_flux_vector = pp.RT0.project_flux_matrix(g, data)
+        rt0_flux_vector = pp.RT0(self.keyword).project_flux_matrix(g, data)
 
         parameter_dictionary = data[pp.PARAMETERS][self.keyword]
         matrix_dictionary = data[pp.DISCRETIZATION_MATRICES][self.keyword]
-        matrix_dictionary_edge = data_edge[pp.DISCRETIZATION_MATRICES][self.keyword]
+
         # Extract parameters
         k = parameter_dictionary["second_order_tensor"]
 
@@ -678,22 +678,15 @@ class FVElliptic(pp.EllipticDiscretization):
 
         # should it be multiplied by factor two?
         transverse_diffusivity = parameter_dictionary_edge["transverse_diffusivity"]
-        div_vector_source = matrix_dictionary["div_vector_source"]
 
-        bound_flux = matrix_dictionary["bound_flux"]
-        flux = matrix_dictionary["flux"]
+        flux = matrix_dictionary[self.flux_matrix_key]
+        bound_flux = matrix_dictionary[self.bound_flux_matrix_key]
         bc_val = parameter_dictionary["bc_values"]
 
         inv_k = np.linalg.inv(k.values[0:3, 0:3, 0])
-        k_trans = transverse_diffusivity[:, 0]
 
-        for c in range(1, mg.num_cells):
-            B = transverse_diffusivity[:, c]
-            k_trans = sps.block_diag((k_trans, B))
-
-        for c in range(1, g.num_cells):
-            A = np.linalg.inv(k.values[0:3, 0:3, c])
-            inv_k = sps.block_diag((inv_k, A))
+        k_trans = sps.block_diag([[transverse_diffusivity[:, c]] for c in range(mg.num_cells)])
+        inv_k = sps.block_diag([np.linalg.inv(k.values[:, :, c]) for c in range(g.num_cells)])
 
         inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
         # If normal diffusivity is given as a constant, parse to np.array
@@ -747,11 +740,11 @@ class FVElliptic(pp.EllipticDiscretization):
                 mixed-dimensional grid.
             data_edge (dictionary): Data dictionary for the edge in the
                 mixed-dimensional grid.
-            grid_swap (boolean): If True, the grid g is identified with the @
-                slave side of the mortar grid in data_adge.
+            grid_swap (boolean): If True, the grid g is identified with the
+                secondary side of the mortar grid in data_adge.
             cc (block matrix, 3x3): Block matrix for the coupling condition.
                 The first and second rows and columns are identified with the
-                master and slave side; the third belongs to the edge variable.
+                primary and secondary side; the third belongs to the edge variable.
                 The discretization of the relevant term is done in-place in cc.
             matrix (block matrix 3x3): Discretization matrix for the edge and
                 the two adjacent nodes.
@@ -782,7 +775,7 @@ class FVElliptic(pp.EllipticDiscretization):
         else:
             proj = mg.mortar_to_secondary_int(g.dim)
 
-        div_vector_source = matrix_dictionary["div_vector_source"]
+        vector_source_discr = matrix_dictionary[self.vector_source_matrix_key]
 
         k = parameter_dictionary["second_order_tensor"]
 
@@ -795,30 +788,27 @@ class FVElliptic(pp.EllipticDiscretization):
             map_arithmetic_mean = sps.coo_matrix(
                 (values, (fi, ci)), shape=(g.num_faces, g.num_cells)
             )
-            div_vector_source = sps.diags(div_vector_source)
-            div_vector_source_inv_k = div_vector_source * map_arithmetic_mean
+#            div_vector_source_inv_k = div_vector_source
             k_trans = transverse_diffusivity[0, :]
             kt = sps.diags(k_trans)
         else:
-            inv_k = np.linalg.inv(k.values[0:2, 0:2, 0])
-            kt = transverse_diffusivity[0:2, 0].reshape((2, 1))
-
-            for c in range(1, g.num_cells):
-                A = np.linalg.inv(k.values[0:2, 0:2, c])
-                inv_k = sps.block_diag((inv_k, A))
-
-            for c in range(1, mg.num_cells):
-                B = transverse_diffusivity[0:2, c].reshape((2, 1))
-                kt = sps.block_diag((kt, B))
-
-            div_vector_source_inv_k = div_vector_source * inv_k
+            kt = sps.block_diag([[transverse_diffusivity[:2, c]] for c in range(mg.num_cells)])
 
         div = pp.fvutils.scalar_divergence(g)
 
         inv_M = sps.diags(1.0 / mg.cell_volumes)
 
+        # Dissection, from the right:
+        # 1) Convert mortar flux to flux density
+        # 2) Convert mortar flux to pressure difference (this is tr(\hat{p}) \ check{p})
+        #    (scaling is with the inverse of the normal diffusivity)
+        # 3) Multiply with transverse diffusivity to get a flux in the tangential
+        #    direction.
+        # 4) Project to secondary grid
+        # 5) Use discretization for vector sources
+        # 6) Divergence.
         cc[self_ind, 2] += (
-            div * div_vector_source_inv_k * proj * kt * inv_k_ortho * inv_M
+            div * vector_source_discr * proj * kt * inv_k_ortho * inv_M
         )
 
     @pp.time_logger(sections=module_sections)
