@@ -625,8 +625,7 @@ class FVElliptic(pp.EllipticDiscretization):
     def assemble_int_bound_grad_p(
         self, g, data, data_edge, cc, matrix, rhs, self_ind, use_secondary_proj=False
     ):
-        """Abstract method. Assemble the contribution from an internal
-        boundary, manifested as a condition on the cell pressure.
+        """Asse
 
         The intended use is when the internal boundary is coupled to another
         node in a mixed-dimensional method. Specific usage depends on the
@@ -664,6 +663,7 @@ class FVElliptic(pp.EllipticDiscretization):
         if use_secondary_proj:
             proj = mg.primary_to_mortar_avg(3)
         else:
+            # Projection is Nd per cell (flux is a vector quantity)
             proj = mg.secondary_to_mortar_avg(3)
 
         rt0_flux_vector = pp.RT0(self.keyword).project_flux_matrix(g, data)
@@ -675,6 +675,8 @@ class FVElliptic(pp.EllipticDiscretization):
         k = parameter_dictionary["second_order_tensor"]
 
         parameter_dictionary_edge = data_edge[pp.PARAMETERS][self.keyword]
+        matrix_dictionary_edge = data_edge[pp.DISCRETIZATION_MATRICES][self.keyword]        
+        ambient_dimension = parameter_dictionary_edge["ambient_dimension"]
 
         # should it be multiplied by factor two?
         transverse_diffusivity = parameter_dictionary_edge["transverse_diffusivity"]
@@ -683,10 +685,12 @@ class FVElliptic(pp.EllipticDiscretization):
         bound_flux = matrix_dictionary[self.bound_flux_matrix_key]
         bc_val = parameter_dictionary["bc_values"]
 
-        inv_k = np.linalg.inv(k.values[0:3, 0:3, 0])
-
-        k_trans = sps.block_diag([[transverse_diffusivity[:, c]] for c in range(mg.num_cells)])
-        inv_k = sps.block_diag([np.linalg.inv(k.values[:, :, c]) for c in range(g.num_cells)])
+        k_trans = sps.block_diag(
+            [[transverse_diffusivity[:, c]] for c in range(mg.num_cells)]
+        )
+        inv_k = sps.block_diag(
+            [np.linalg.inv(k.values[:, :, c]) for c in range(g.num_cells)]
+        )
 
         inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
         # If normal diffusivity is given as a constant, parse to np.array
@@ -698,9 +702,11 @@ class FVElliptic(pp.EllipticDiscretization):
         # compute grad_p = inv_k * q
         # shape (3 x g.num_cells, g.num_faces)
         # order is q_1x, q_1y, q_1z, q_2x, q_2y, q_2z, ..
-        grad_p = inv_k * rt0_flux_vector  # in_plane_rt0_flux_vector
-        # grad_p = inv_k * in_plane_rt0_flux_vector
 
+        # Minus sign reflects minus in Darcy's law
+        grad_p = -inv_k * rt0_flux_vector  # in_plane_rt0_flux_vector
+        # grad_p = inv_k * in_plane_rt0_flux_vector
+        
         # compute T = inv_k_ortho * k_trans
         # shape (mg.num_cells, 3 x mg.num_cells)
         # order is
@@ -708,15 +714,28 @@ class FVElliptic(pp.EllipticDiscretization):
         #  [  0      0      0    kt_2x, kt_2y, kt_2z, ...
         if mg.num_cells == 1:
             T = inv_k_ortho * k_trans.reshape((1, 3))
-            term = -np.dot(T, proj * grad_p)
+            term = np.dot(T, proj * grad_p)
         else:
+            # T computes a transverse flux from a pressure gradient (assumed mapped to the
+            # mortar grid (k_trans)) and maps back to a pressure difference (by inv_k_ortho).
+            # Note that the 'pressure difference' only contains contributions from the
+            # lower-dimensiona grid.
             T = inv_k_ortho * k_trans
-            term = -T * proj * grad_p
+            # Term gives the mapping from a gradient to the pressure difference
+            term = T * proj * grad_p
 
         if g.dim == 1:
+            # Fix data format for 1d grids
             term = sps.csr_matrix(term)
 
-        cc[2, self_ind] += term * flux
+        # The final contributions requires the mapping from pressures to fluxes (to be
+        # picked up by the pressure gradient recontruction). For the lhs term, this entails
+        # multiplication with the flux discretization, whereas the rhs terms relates the
+        # boundary condition to fluxes.
+        # NOTE: Add contribution directly to the matrix (related to this method being used
+        # by the SemiLocal law, which inherits from the standard RobinCoupling; it turns
+        # out that if we add to cc, some contributions will be added twice).
+        matrix[2, self_ind] += matrix_dictionary_edge['mortar_scaling'] * term * flux
 
         rhs[2] -= term * bound_flux * bc_val
 
@@ -764,35 +783,28 @@ class FVElliptic(pp.EllipticDiscretization):
 
         transverse_diffusivity = parameter_dictionary_edge["transverse_diffusivity"]
         inv_k_ortho = 1.0 / (parameter_dictionary_edge["normal_diffusivity"])
+
         # If normal diffusivity is given as a constant, parse to np.array
         if not isinstance(inv_k_ortho, np.ndarray):
             inv_k_ortho *= np.ones(mg.num_cells)
 
         inv_k_ortho = sps.diags(inv_k_ortho)
 
+        ambient_dimension: int = parameter_dictionary_edge["ambient_dimension"]
+
         if use_secondary_proj:
-            proj = mg.mortar_to_primary_int(g.dim)
+            proj = mg.mortar_to_primary_int(ambient_dimension)
         else:
-            proj = mg.mortar_to_secondary_int(g.dim)
+            proj = mg.mortar_to_secondary_int(ambient_dimension)
 
         vector_source_discr = matrix_dictionary[self.vector_source_matrix_key]
 
-        k = parameter_dictionary["second_order_tensor"]
-
-        if g.dim == 1:
-            fi, ci, _ = sps.find(g.cell_faces)
-            fc_cc = g.face_centers[::, fi] - g.cell_centers[::, ci]
-            dist_face_cell = np.linalg.norm(fc_cc, 2, axis=0)
-            k = k.values[0, 0, ci]
-            values = np.divide(dist_face_cell, k)
-            map_arithmetic_mean = sps.coo_matrix(
-                (values, (fi, ci)), shape=(g.num_faces, g.num_cells)
-            )
-#            div_vector_source_inv_k = div_vector_source
-            k_trans = transverse_diffusivity[0, :]
-            kt = sps.diags(k_trans)
-        else:
-            kt = sps.block_diag([[transverse_diffusivity[:2, c]] for c in range(mg.num_cells)])
+        kt = sps.block_diag(
+            [
+                [transverse_diffusivity[:ambient_dimension, c]]
+                for c in range(mg.num_cells)
+            ]
+        ).T
 
         div = pp.fvutils.scalar_divergence(g)
 
@@ -803,13 +815,15 @@ class FVElliptic(pp.EllipticDiscretization):
         # 2) Convert mortar flux to pressure difference (this is tr(\hat{p}) \ check{p})
         #    (scaling is with the inverse of the normal diffusivity)
         # 3) Multiply with transverse diffusivity to get a flux in the tangential
-        #    direction.
+        #    direction, still on the mortar grid.
         # 4) Project to secondary grid
         # 5) Use discretization for vector sources
         # 6) Divergence.
-        cc[self_ind, 2] += (
-            div * vector_source_discr * proj * kt * inv_k_ortho * inv_M
-        )
+
+        # NOTE: Add contribution directly to the matrix (related to this method being used
+        # by the SemiLocal law, which inherits from the standard RobinCoupling; it turns
+        # out that if we add to cc, some contributions will be added twice).
+        matrix[self_ind, 2] += div * vector_source_discr * proj * kt * inv_k_ortho * inv_M
 
     @pp.time_logger(sections=module_sections)
     def enforce_neumann_int_bound(self, g, data_edge, matrix, self_ind):

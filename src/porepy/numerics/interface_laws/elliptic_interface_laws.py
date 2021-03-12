@@ -97,7 +97,7 @@ class RobinCoupling(
             self.kinv_scaling = True
         else:
             # At least one of the neighboring discretizations is FV.
-            self.kinv_scaling = False
+            self.kinv_scaling = True
 
     def ndof(self, mg: pp.MortarGrid):
         return mg.num_cells
@@ -914,8 +914,6 @@ class SemiLocalCoupling(RobinCoupling):
 
         Eta = sps.diags(inv_k)
 
-        matrix_dictionary_edge["Robin_discr"] = -inv_M * Eta
-
     def assemble_matrix_rhs(
         self,
         g_primary: pp.Grid,
@@ -949,6 +947,10 @@ class SemiLocalCoupling(RobinCoupling):
         primary_ind = 0
         secondary_ind = 1
 
+        # Assemble extra terms. Note that these will add directly to matrix (*not* cc)
+        # since cc is already added to matrix in super.
+        # FIXME: Restructuring would be appropriate.
+
         # Assemble contribution from secondary grid to the pressure jump at the mortar
         self.discr_secondary.assemble_int_bound_grad_p(
             g_secondary, data_secondary, data_edge, cc, matrix, rhs, secondary_ind
@@ -957,8 +959,6 @@ class SemiLocalCoupling(RobinCoupling):
         self.discr_secondary.assemble_int_bound_vector_source(
             g_secondary, data_secondary, data_edge, cc, matrix, rhs, secondary_ind
         )
-
-        matrix += cc
 
         self.discr_primary.enforce_neumann_int_bound(
             g_primary, data_edge, matrix, primary_ind
@@ -1012,6 +1012,7 @@ class SemiLocalCoupling(RobinCoupling):
         return self.discr_primary.assemble_int_bound_pressure_trace_between_interfaces(
             g, data_grid, proj_pressure, proj_flux, cc, matrix, rhs
         )
+    
 
     def assemble_edge_coupling_via_low_dim(
         self,
@@ -1044,6 +1045,7 @@ class SemiLocalCoupling(RobinCoupling):
                 secondary and mortar variable, respectively.
 
         """
+
         mg_primary = data_primary_edge["mortar_grid"]
         mg_secondary = data_secondary_edge["mortar_grid"]
 
