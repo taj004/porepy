@@ -223,8 +223,6 @@ class RT0(pp.numerics.vem.dual_elliptic.DualElliptic):
             g, deviation_from_plane_tol
         )
 
-        nodes, _, _ = sps.find(g.face_nodes)
-
         # Allocate the data to store matrix entries, that's the most efficient
         # way to create a sparse matrix.
         size = 3 * (g.dim + 1) * g.num_cells
@@ -233,14 +231,13 @@ class RT0(pp.numerics.vem.dual_elliptic.DualElliptic):
         if g.dim > 1:
             for i in range(1, g.dim):
                 I = np.vstack((I, nd))
-        J = np.empty(size, dtype=np.int)
+        J = np.empty(size, dtype=int)
         dataIJ = np.empty(size)
         idx = 0
 
         # compute the oppisite node per face
         self._compute_cell_face_to_opposite_node(g, data)
         cell_face_to_opposite_node = data[self.cell_face_to_opposite_node]
-
 
         for c in np.arange(g.num_cells):
             loc = slice(g.cell_faces.indptr[c], g.cell_faces.indptr[c + 1])
@@ -271,74 +268,9 @@ class RT0(pp.numerics.vem.dual_elliptic.DualElliptic):
             idx += cols.size
 
         # Construct the global matrices
-        mass = sps.coo_matrix((dataIJ, (I.ravel("f"), J)))
+        mass = sps.coo_matrix((dataIJ, (I.ravel("f"), J))).tocsr()
 
         return mass
-
-    @staticmethod
-    def project_flux(g, u, data):
-        """Project the velocity computed with a rt0 solver to obtain a
-        piecewise constant vector field, one triplet for each cell.
-        We assume the following two sub-dictionaries to be present in the data
-        dictionary:
-            parameter_dictionary, storing all parameters.
-                Stored in data[pp.PARAMETERS][self.keyword].
-            matrix_dictionary, for storage of discretization matrices.
-                Stored in data[pp.DISCRETIZATION_MATRICES][self.keyword]
-            deviation_from_plane_tol: The geometrical tolerance, used in the check to
-                rotate 2d and 1d grids.
-
-        Parameters
-        ----------
-        g : grid, or a subclass, with geometry fields computed.
-        u : array (g.num_faces) Velocity at each face.
-
-        Return
-        ------
-        P0u : ndarray (3, g.num_faces) Velocity at each cell.
-
-        """
-        # Allow short variable names in backend function
-        # pylint: disable=invalid-name
-
-        if g.dim == 0:
-            return np.zeros(3).reshape((3, 1))
-
-        faces, cells, sign = sps.find(g.cell_faces)
-        index = np.argsort(cells)
-        faces, sign = faces[index], sign[index]
-
-        # Map the domain to a reference geometry (i.e. equivalent to compute
-        # surface coordinates in 1d and 2d)
-        deviation_from_plane_tol = data.get("deviation_from_plane_tol", 1e-5)
-        c_centers, f_normals, f_centers, R, dim, node_coords = pp.map_geometry.map_grid(
-            g, deviation_from_plane_tol
-        )
-
-        nodes, _, _ = sps.find(g.face_nodes)
-
-        P0u = np.zeros((3, g.num_cells))
-
-        for c in np.arange(g.num_cells):
-            loc = slice(g.cell_faces.indptr[c], g.cell_faces.indptr[c + 1])
-            faces_loc = faces[loc]
-
-            # find the opposite node id for each face
-            node = RT0.opposite_side_node(g.face_nodes, nodes, faces_loc)
-
-            # extract the coordinates
-            center = np.tile(c_centers[:, c], (node.size, 1)).T
-            delta_c = center - node_coords[:, node]
-            delta_f = f_centers[:, faces_loc] - node_coords[:, node]
-            normals = f_normals[:, faces_loc]
-
-            Pi = delta_c / np.einsum("ij,ij->j", delta_f, normals)
-
-            # extract the velocity for the current cell
-            P0u[dim, c] = np.dot(Pi, u[faces_loc])
-            P0u[:, c] = np.dot(R.T, P0u[:, c])
-
-        return P0u
 
     @staticmethod
     @pp.time_logger(sections=module_sections)
