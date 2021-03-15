@@ -680,6 +680,7 @@ class FVElliptic(pp.EllipticDiscretization):
 
         # should it be multiplied by factor two?
         transverse_diffusivity = parameter_dictionary_edge["transverse_diffusivity"]
+        sgn = mg.sign_of_mortar_sides(transverse_diffusivity.shape[0])
 
         flux = matrix_dictionary[self.flux_matrix_key]
         bound_flux = matrix_dictionary[self.bound_flux_matrix_key]
@@ -713,14 +714,14 @@ class FVElliptic(pp.EllipticDiscretization):
         # [[kt_1x, kt_1y, kt_1z,   0      0      0  , ...
         #  [  0      0      0    kt_2x, kt_2y, kt_2z, ...
         if mg.num_cells == 1:
-            T = inv_k_ortho * k_trans.reshape((1, 3))
+            T = inv_k_ortho * sgn * k_trans.reshape((1, 3))
             term = np.dot(T, proj * grad_p)
         else:
             # T computes a transverse flux from a pressure gradient (assumed mapped to the
             # mortar grid (k_trans)) and maps back to a pressure difference (by inv_k_ortho).
             # Note that the 'pressure difference' only contains contributions from the
             # lower-dimensiona grid.
-            T = inv_k_ortho * k_trans
+            T = inv_k_ortho * k_trans * sgn
             # Term gives the mapping from a gradient to the pressure difference
             term = T * proj * grad_p
 
@@ -796,9 +797,9 @@ class FVElliptic(pp.EllipticDiscretization):
             proj = mg.mortar_to_primary_int(ambient_dimension)
         else:
             proj = mg.mortar_to_secondary_int(ambient_dimension)
+        sgn = mg.sign_of_mortar_sides(ambient_dimension)
 
         vector_source_discr = matrix_dictionary[self.vector_source_matrix_key]
-
         kt = sps.block_diag(
             [
                 [transverse_diffusivity[:ambient_dimension, c]]
@@ -823,7 +824,7 @@ class FVElliptic(pp.EllipticDiscretization):
         # NOTE: Add contribution directly to the matrix (related to this method being used
         # by the SemiLocal law, which inherits from the standard RobinCoupling; it turns
         # out that if we add to cc, some contributions will be added twice).
-        matrix[self_ind, 2] += div * vector_source_discr * proj * kt * inv_k_ortho * inv_M
+        matrix[self_ind, 2] += div * vector_source_discr * proj * sgn * kt * inv_k_ortho * inv_M
 
     @pp.time_logger(sections=module_sections)
     def enforce_neumann_int_bound(self, g, data_edge, matrix, self_ind):
