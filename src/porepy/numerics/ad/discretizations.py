@@ -22,6 +22,7 @@ __all__ = [
     "MassMatrixAd",
     "UpwindAd",
     "RobinCouplingAd",
+    "UpwindCouplingAd",
 ]
 
 
@@ -327,6 +328,23 @@ class RobinCouplingAd:
 
         self.mortar_scaling: _MergedOperator
         self.mortar_discr: _MergedOperator
+        _wrap_discretization(self, self._discretization, edges)
+
+    def __repr__(self) -> str:
+        s = f"Ad discretization of type {self._name}. Defined on {len(self._edges)} grids"
+        return s
+
+
+class UpwindCouplingAd:
+    def __init__(self, keyword, edges):
+        if isinstance(edges, list):
+            self._edges = edges
+        else:
+            self._edges = [edges]
+        self._discretization = pp.UpwindCoupling(keyword)
+        self._name = "Upwind interface coupling"
+        self.keyword = keyword
+
         _wrap_discretization(self, self._discretization, edges)
 
     def __repr__(self) -> str:
